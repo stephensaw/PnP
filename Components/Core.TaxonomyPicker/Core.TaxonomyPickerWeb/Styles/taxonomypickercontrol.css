@@ -33,7 +33,7 @@
 
 .cam-taxpicker-button {
     margin: 2px;
-    background: url(images/EMMCopyTerm.png) no-repeat;
+    background: url(/Styles/Images/EMMCopyTerm.png) no-repeat;
     width: 16px;
     height: 16px;
     float: left;
@@ -84,7 +84,7 @@
     width: 16px;
     height: 16px;
     cursor: pointer;
-    background: url(images/Close.png) no-repeat;
+    background: url(/Styles/Images/Close.png) no-repeat;
     float: right;
 }
 
@@ -235,15 +235,15 @@
     float: left;
     width: 15px;
     height: 20px;
-    background: url(images/MDNNo.png) no-repeat;
+    background: url(/Styles/Images/MDNNo.png) no-repeat;
 }
 
 .expanded.cam-taxpicker-expander {
-    background: url(images/MDNExpanded.png) no-repeat;
+    background: url(/Styles/Images/MDNExpanded.png) no-repeat;
 }
 
 .collapsed.cam-taxpicker-expander {
-    background: url(images/MDNCollapsed.png) no-repeat;
+    background: url(/Styles/Images/MDNCollapsed.png) no-repeat;
 }
 
 .cam-taxpicker-treenode-title {
@@ -259,7 +259,7 @@
 
 .selected.cam-taxpicker-treenode-title {
     border: 1px solid #ff9933;
-    background: url(images/menubuttonhover.gif) repeat-x;
+    background: url(/Styles/Images/menubuttonhover.gif) repeat-x;
 }
 
 .root.cam-taxpicker-treenode-title:hover {
@@ -278,7 +278,7 @@
     padding-right: 3px;
     min-width: 100px;
     border: 1px solid #ff9933;
-    background: url(images/menubuttonhover.gif) repeat-x;
+    background: url(/Styles/Images/menubuttonhover.gif) repeat-x;
     min-height: 19px;
 }
 

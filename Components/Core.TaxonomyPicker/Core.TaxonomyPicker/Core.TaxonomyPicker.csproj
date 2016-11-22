@@ -20,6 +20,7 @@
     <WorkflowPartId>{1dee47c8-55aa-4a9b-8d48-29cd3e6b8a8f}</WorkflowPartId>
     <CspkgPartId>{ad3e7459-c872-48cb-85b6-5e519c762554}</CspkgPartId>
     <SqlPackagePartId>{a6bfe35d-7a95-48a2-a44c-7d0ffba58008}</SqlPackagePartId>
+    <ActivePublishProfile>SharePoint Online</ActivePublishProfile>
   </PropertyGroup>
   <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Debug|AnyCPU' ">
     <DebugSymbols>true</DebugSymbols>
@@ -78,6 +79,31 @@
     <None Include="Package\Package.package">
       <PackageId>{1d9ec0f3-1423-4052-9af3-1bebfbb4a79b}</PackageId>
     </None>
+  </ItemGroup>
+  <ItemGroup>
+    <Content Include="Resources %28Host Web%29\Resources.resx">
+      <OpcRelationship>content-defaultresource</OpcRelationship>
+    </Content>
+  </ItemGroup>
+  <ItemGroup>
+    <Content Include="Resources %28Host Web%29\Resources.zh-CN.resx">
+      <OpcRelationship>content-resource</OpcRelationship>
+    </Content>
+  </ItemGroup>
+  <ItemGroup>
+    <Content Include="Resources %28Host Web%29\Resources.en.resx">
+      <OpcRelationship>content-resource</OpcRelationship>
+    </Content>
+  </ItemGroup>
+  <ItemGroup>
+    <Content Include="Resources %28Host Web%29\Resources.zh-Hans.resx">
+      <OpcRelationship>content-resource</OpcRelationship>
+    </Content>
+  </ItemGroup>
+  <ItemGroup>
+    <Content Include="Resources %28Host Web%29\Resources.en-US.resx">
+      <OpcRelationship>content-resource</OpcRelationship>
+    </Content>
   </ItemGroup>
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
   <PropertyGroup>

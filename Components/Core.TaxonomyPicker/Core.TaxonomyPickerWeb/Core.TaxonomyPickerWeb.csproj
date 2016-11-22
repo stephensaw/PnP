@@ -20,6 +20,7 @@
     <IISExpressWindowsAuthentication />
     <IISExpressUseClassicPipelineMode />
     <TargetOfficeVersion>15.0</TargetOfficeVersion>
+    <UseGlobalApplicationHostFile />
   </PropertyGroup>
   <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Debug|AnyCPU' ">
     <DebugSymbols>true</DebugSymbols>
@@ -81,6 +82,7 @@
   <ItemGroup>
     <Content Include="Scripts\app.js" />
     <Content Include="Scripts\taxonomypickercontrol_resources.en.js" />
+    <None Include="Properties\PublishProfiles\SharePoint Online.pubxml" />
     <None Include="Web.Debug.config">
       <DependentUpon>Web.config</DependentUpon>
     </None>
@@ -108,7 +110,9 @@
     <Content Include="Styles\Images\MDNNo.png" />
     <Content Include="Styles\Images\menubuttonhover.gif" />
     <Content Include="Styles\taxonomypickercontrol.css" />
-    <Content Include="Web.config" />
+    <Content Include="Web.config">
+      <SubType>Designer</SubType>
+    </Content>
   </ItemGroup>
   <ItemGroup>
     <Compile Include="Global.asax.cs">

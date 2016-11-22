@@ -1,4 +1,5 @@
 ﻿var CAMControl;
+
 (function (CAMControl) {
     var spContext; //global sharepoint context used throughout the taxonomy picker control (set in the taxpicker constructor)
     var taxIndex = 0; //keeps index of the taxonomy pickers in use
@@ -15,6 +16,7 @@
             this.RawTerm = rawTerm;
         }
     }
+
     jQuery.extend(Term.prototype, {
         //creates a cloned copy of a term to avoid reference issues
         clone: function () {
@@ -26,6 +28,7 @@
             return jQuery('<li class="cam-taxpicker-treenode-li"><div class="cam-taxpicker-treenode"><div class="cam-taxpicker-expander ' + addlClass + '"></div><img src="' + this.TermSet.TermSetImageUrl + '/EMMTerm.png" alt=""/><span class="cam-taxpicker-treenode-title"  data-item="' + this.Name + '|' + this.Id + '">' + this.Name + '</span></div></li>');
         }
     });
+
     //********************** END Term Class **********************
 
     //********************** START TermSet Class **********************
@@ -34,9 +37,10 @@
         this.Id = options.termSetId; //Id of the TermSet in SharePoint
         this.UseHashtags = options.useHashtags; //bool indicating if the Hashtags termset is used during initalization
         this.UseKeywords = options.useKeywords; //bool indicating if the Keywords termset is used during initalization
-        this.Terms = new Array(); //Terms of the termset listed in a heirarchy (if applicable)
-        this.FlatTerms = new Array(); //Flat representation of terms in the Termset
-        this.FlatTermsForSuggestions = new Array();
+        this.Terms = []; //Terms of the termset listed in a heirarchy (if applicable)
+        this.FlatTerms = []; //Flat representation of terms in the Termset
+        this.FlatTermsForSuggestions = [];
+        this.RawTermStores = null;
         this.RawTerms = null; //Raw terms returned from CSOM
         this.TermsLoaded = false; //boolean indicating if the terms have been returned and loaded from CSOM
         this.OnTermsLoaded = null; //optional internal callback when terms are loaded
@@ -47,39 +51,83 @@
         this.IsOpenForTermCreation = false; //bool indicating if the termset is open for new term creation
         this.NewTerm = null; //the new term being added
 
-        //TODO NEW STUFF HERE
         this.Name = options.termSetName; //name of the termset so we can retrive by name instead of id
         this.TermSetImageUrl = options.termSetImageUrl; //url of the termset image
         this.FilterTermId = options.filterTermId; // To support filter terms based on Id
         this.LevelToShowTerms = options.levelToShowTerms; // show terms only till the specified level
         this.UseTermSetasRootNode = options.useTermSetasRootNode //bool indicating if termset to be shown as root node or not
     }
+
     jQuery.extend(TermSet.prototype, {
-        //initializes the Termset, including loading all terms using CSOM
+
         initialize: function () {
-            //Get the taxonomy session using CSOM
             var taxSession = SP.Taxonomy.TaxonomySession.getTaxonomySession(spContext);
-            //Use the default term store...this could be extended here to support additional term stores
-            var termStore = taxSession.getDefaultSiteCollectionTermStore();
 
-            //get the termset based on the properties of the termset
-            if (this.Id != null)
-                this.RawTermSet = termStore.getTermSet(this.Id); //get termset by id
-            else if (this.Name) {
-                var rawTermSets = termStore.getTermSetsByName(this.Name, 1033); //get termset by name via english language
-                this.RawTermSet = rawTermSets.getByName(this.Name); //get termset by id
-            }
-            else if (this.UseHashtags)
-                this.RawTermSet = termStore.get_hashTagsTermSet(); //get the hashtags termset
-            else if (this.UseKeywords)
-                this.RawTermSet = termStore.get_keywordsTermSet(); //get the keywords termset
-
-            //get ALL terms for the termset and we will organize them in the async callback
-            this.RawTerms = this.RawTermSet.getAllTerms();
-            spContext.load(this.RawTermSet);
-            spContext.load(this.RawTerms, 'Include(Id,Name,PathOfTerm,Labels,CustomProperties,LocalCustomProperties,IsDeprecated)');
-            spContext.executeQueryAsync(Function.createDelegate(this, this.termsLoadedSuccess), Function.createDelegate(this, this.termsLoadedFailed));
+            this.RawTermStores = taxSession.get_termStores();
+            spContext.load(this.RawTermStores);
+            spContext.executeQueryAsync(Function.createDelegate(this, this.termStoresLoadedSuccess), Function.createDelegate(this, this.termStoresLoadeFailed));
         },
+
+        termStoresLoadedSuccess: function () {
+            var termStoreEnumerator = this.RawTermStores.getEnumerator();
+
+            while (termStoreEnumerator.moveNext()) {
+                var termStore = termStoreEnumerator.get_current();
+
+                console.info(termStore.get_name(), termStore.get_id().toString());
+            }
+        },
+
+        termStoresLoadeFailed: function (e) {
+            console.error("Failed to log term stores", e);
+        },
+
+        loadGroups: function (termStore) {
+            var groups = termStore.get_groups();
+
+            spContext.load(groups);
+            spContext.executeQueryAsync(Function.createDelegate(this, function () {
+                this.groupsLoadedSuccess(groups);
+            }), Function.createDelegate(this, this.groupsLoadedFailed));
+        },
+
+        groupsLoadedSuccess: function (groups) {
+            var groupsEnumerator = groups.getEnumerator();
+
+            while (groupsEnumerator.moveNext()) {
+                var group = groupsEnumerator.get_current();
+
+                console.info(group.get_name(), group.get_id().toString());
+            }
+        },
+
+        groupsLoadedFailed: function (e) {
+            console.error("Failed to load groups", e);
+        },
+
+        loadTermSets: function (group) {
+            var termSets = group.get_termSets();
+
+            spContext.load(termSets);
+            spContext.executeQueryAsync(Function.createDelegate(this, function () {
+                this.termSetsLoadedSuccess(termSets);
+            }), Function.createDelegate(this, this.termSetsLoadedFailed));
+        },
+
+        termSetsLoadedSuccess: function (termSets) {
+            var termSetsEnumerator = termSets.getEnumerator();
+
+            while (termSetsEnumerator.moveNext()) {
+                var termSet = termSetsEnumerator.get_current();
+
+                console.info("  > " + termSet.get_name());
+            }
+        },
+
+        termSetsLoadedFailed: function (e) {
+            console.error("Failed to load term sets", e);
+        },
+
         //internal callback when terms are returned from CSOM
         termsLoadedSuccess: function () {
             //set termset properties
@@ -180,11 +228,36 @@
             if (this.TermsLoadedCallback != null)
                 this.TermsLoadedCallback();
         },
+
         //internal callback when failed CSOM query occurs getting terms
         termsLoadedFailed: function (event, args) {
             //display error message to user
             alert(TaxonomyPickerConsts.TERMSET_LOAD_FAILED);
         },
+
+        loadTerms: function (termSet) {
+            var terms = termSet.get_terms();
+
+            spContext.load(terms);
+            spContext.executeQueryAsync(Function.createDelegate(this, function () {
+                this.termsLoadedSuccess(terms);
+            }), Function.createDelegate(this, this.termsLoadedFailed));
+        },
+
+        termsLoadedSuccess: function (terms) {
+            var termsEnumerator = terms.getEnumerator();
+
+            while (termsEnumerator.moveNext()) {
+                var term = termsEnumerator.get_current();
+
+                console.info("          > " + term.get_name());
+            }
+        },
+
+        termsLoadedFailed: function (e) {
+            console.error("Failed to load terms", e);
+        },
+
         //gets a term parent collection based on the path passed in (ex: World;Europe;Finland would return the Europe term)
         getTermParentCollectionByPath: function (path) {
             var term = null;
@@ -205,6 +278,7 @@
 
             return termList;
         },
+
         //get suggestions based on the values typed by user
         getSuggestions: function (text) {
             var matches = new Array();
@@ -215,6 +289,7 @@
             });
             return matches;
         },
+
         getContainsSuggestions: function (text, useContainsSuggestions) {
             var matches = new Array();
             jQuery(this.FlatTermsForSuggestions).each(function (i, e) {
@@ -224,6 +299,7 @@
             });
             return matches;
         },
+
         //get a term by id
         getTermById: function (id) {
             for (var i = 0; i < this.FlatTerms.length; i++) {
@@ -233,6 +309,7 @@
 
             return null;
         },
+
         //get a term by label match
         getTermsByLabel: function (label) {
             var matches = new Array();
@@ -243,6 +320,7 @@
 
             return matches;
         },
+
         //adds a new term to the the root of a termset or as a child of another term
         addTerm: function (label, taxpicker, parentTermId) {
             var parent = null;
@@ -279,6 +357,7 @@
                     Function.createDelegate(taxpicker, taxpicker.termAddFailed));
             }
         },
+
         //checks if a term exists with the the path passed in
         termExists: function (pathOfTerm) {
             var termFound = false;
@@ -396,9 +475,6 @@
                 this._control.empty().append(this._editor).append(this._hiddenValidated);
             }
 
-
-
-
             //initialize value if it exists
             if (this._initialValue != undefined && this._initialValue.length > 0) {
                 var terms = JSON.parse(this._initialValue);
@@ -419,11 +495,13 @@
             this._editor.keydown(Function.createDelegate(this, this.keydown)); //key is pressed in the editor control
             jQuery(document).mousedown(Function.createDelegate(this, this.checkExternalClick)); //mousedown somewhere in the document
         },
+
         //handle reset
         reset: function () {
             this._selectedTerms = new Array();
             this._editor.html('');
         },
+
         //handle keydown event in editor control
         keydown: function (event, args) {
             // if the control is readonly then ignore all keystrokes
@@ -592,6 +670,7 @@
                 }
             }           
         },
+
         //get the cursor position in a content editable div
         getCaret: function (target) {
             var isContentEditable = target.contentEditable === 'true';
@@ -633,6 +712,7 @@
             //not supported
             return 0;
         },
+
         //sets the cursor caret (position in the editor control)
         setCaret: function () {
             //find the marker
@@ -668,6 +748,7 @@
                 marker.parentNode.removeChild(marker);
             }
         },
+
         //place the cursor at the end of the contentEditable div
         placeCaretAtEnd: function (el) {
 		    el.focus();
@@ -685,7 +766,8 @@
 		        textRange.collapse(false);
 		        textRange.select();
 		    }
-		},
+        },
+
         //validates the text input into ranges and html output
         validateText: function (txt) {
             var textValidation = { html: '', ranges: [] };
@@ -730,6 +812,7 @@
 
             return textValidation;
         },
+
         //marks text input with valid and invalid markup
         markInvalidTerms: function (textValidation) {
             var html = '';
@@ -776,6 +859,7 @@
             }
             return html;
         },
+
         //shows suggestions based on the unvalidated text being entered
         showSuggestions: function (textValidation, caret) {
             //find the unvalidated text the cursor is in
@@ -834,6 +918,7 @@
             else
                 this._suggestionContainer.hide();
         },
+
         //term node add is canceled
         termNodeAddCancel: function (event) {
             //remove the expand/collapse image if needed
@@ -846,6 +931,7 @@
             if (this._dlgNewNode != null)
                 this._dlgNewNode.remove();
         },
+
         //term node is clicked in the treeview
         termNodeClicked: function (event) {
             //clear any term that was in the middle of an add
@@ -867,6 +953,7 @@
             else
                 this._dlgCurrTerm = null;
         },
+
         //term node is double clicked in the treeview
         termNodeDoubleClicked: function (event) {
             //clear any term that was in the middle of an add
@@ -888,6 +975,7 @@
                 this._dlgEditor.html(this.selectedTermsToHtml());
             }
         },
+
         //dialog select button is clicked...use this to add any selected node as a selected term
         dialogSelectButtonClicked: function (event) {
             if (this._dlgCurrTerm != null) {
@@ -898,6 +986,7 @@
                 this._dlgEditor.html(this.selectedTermsToHtml());
             }
         },
+
         //dialog OK button clicked
         dialogOkClicked: function (event) {
             //update the control value
@@ -909,6 +998,7 @@
             if (this._changeCallback != null)
                 this._changeCallback();
         },
+
         //dialog Cancel button clicked
         dialogCancelClicked: function (event) {
             //reset the selected terms
@@ -917,6 +1007,7 @@
             //close the dialog
             this.closePickerDialog(event);
         },
+
         //dialog new term button is clicked
         dialogNewTermClicked: function (event) {
             if (jQuery('.cam-taxpicker-treenode-newnode').length > 0) // don't allow adding multiple nodes at once
@@ -950,6 +1041,7 @@
             this._dlgNewNodeEditor.focus();
             this._dlgNewNodeEditor.keydown(Function.createDelegate(this, this.dialogNewTermKeydown));
         },
+
         //fires for each keydown in the new term editor
         dialogNewTermKeydown: function (event) {
             //check for Tab, Esc, or Enter keys
@@ -976,6 +1068,7 @@
                     return false;
             }
         },
+
         //successful callback from creating a new term
         termAddSuccess: function (event, args) {
             //add the new term to all applicable collections
@@ -1001,6 +1094,7 @@
             this._dlgCurrTermNode = title; // title node as current node
             this._dlgCurrTerm = newTerm;
         },
+
         //failed callback from trying to create a new term
         termAddFailed: function (event, args) {
             //remove the expand/collapse image if needed
@@ -1012,6 +1106,7 @@
             //cancel the add by removing the new term
             this._dlgNewNode.remove();
         },
+
         //fires when a user selected a suggested term in the suggestions list
         suggestionClicked: function (event) {
             var obj = jQuery(event.target);
@@ -1034,6 +1129,7 @@
             if (this._changeCallback != null)
                 this._changeCallback();
         },
+
         //used to check if focus is lost from the control (invalidate and hide suggestions)
         checkExternalClick: function (event) {
             //check if the target is outside the picker
@@ -1045,6 +1141,7 @@
                 this._suggestionContainer.hide(); //hide suggestions
             }
         },
+
         //show the dialog picker
         showPickerDialog: function (event) {
             //check to make sure the termset has loaded
@@ -1160,11 +1257,13 @@
                 this._dlgAddNewTermButton.click(Function.createDelegate(this, this.dialogNewTermClicked));
             }
         },
+
         //closes the picker dialog
         closePickerDialog: function (event) {
             //remove the picker dialog from the body
             jQuery('body').children('.cam-taxpicker-dialog').remove();
         },
+
         //adds a new term to the end of this._selectedTerms
         pushSelectedTerm: function (term) {
             if (!this.existingTerm(term)) {
@@ -1185,6 +1284,7 @@
                 this._hiddenValidated.trigger('change');
             }
         },
+
         //if the term already exists in the selected terms then don't add it
         existingTerm: function (term) {
             for (var j = 0; j < this._selectedTerms.length; j++) {
@@ -1194,6 +1294,7 @@
             }
             return false;
         },
+
         //removes the last term from this._selectedTerms
         popSelectedTerm: function () {
             //remove the last selected term
@@ -1202,6 +1303,7 @@
             //added to trigger change event 
             this._hiddenValidated.trigger('change');
         },
+
         //converts this._selectedTerms to html for an editor field
         selectedTermsToHtml: function () {
             var termsHtml = '';
@@ -1211,6 +1313,7 @@
             }
             return termsHtml;
         },
+
         //converts this._selectedTerms to array for external applications use.
         selectedTermNamesToArray: function () {
             var termsArray = [];
@@ -1220,6 +1323,7 @@
             }
             return termsArray;
         },
+
         //trim suggestions based on existing selections
         trimSuggestions: function (suggestions) {
             var trimmedSuggestions = new Array();
@@ -1290,25 +1394,6 @@
         });
     }
 
-    //called recursively to build hierarchical representation of terms in a termset
-    function getTerms(term, termEnumerator) {
-        for (i = 0; i < term.termsCount; i++) {
-            termEnumerator.moveNext();
-            var currentTerm = termEnumerator.get_current();
-            var cTerm = {
-                name: currentTerm.get_name(),
-                id: currentTerm.get_id(),
-                pathOfTerm: currentTerm.get_pathOfTerm(),
-                termsCount: currentTerm.get_termsCount(),
-                childTerms: []
-            };
-
-            //get the child terms for this term
-            getTerms(cTerm, termEnumerator);
-            term.childTerms[i] = cTerm;
-        }
-    }
-
     //creates a new guid
     function newGuid() {
         var result, i, j;
@@ -1321,10 +1406,12 @@
         }
         return result
     }
+
     //Highlights matches with yellow
     function getStartingWithHighlightedText(termLabel, match, useContainsSuggestions) {
         return termLabel.replace(match, '<span style="background-color: yellow;">' + match + '</span>');
     }
+
     function getContainsWithHighlightedText(termLabel, match, useContainsSuggestions) {
         var globalCaseInsensitiveRegExp = new RegExp(match, "ig");
         return termLabel.replace(globalCaseInsensitiveRegExp, '<span style="background-color: yellow;">' + match + '</span>');
@@ -1332,15 +1419,15 @@
 
     //extends jquery to support taxpicker function
     jQuery.fn.taxpicker = function (options, ctx, changeCallback) {
-        //TODO: display error message when the control isn't bound correctly????
-
         //verify context
-        if (!ctx)
+        if (!ctx) {
             return this;
+        }
 
         //verify an empty collection wasn't passed
-        if (!this.length)
+        if (!this.length) {
             return this;
+        }
 
         //make sure this is a hidden element
         if (this[0].tagName.toLowerCase() != 'input' || this[0].type.toLowerCase() != 'hidden')
@@ -1348,12 +1435,15 @@
 
         //set spcontext
         spContext = ctx;
-        if (jQuery.taxpicker == undefined)
+
+        if (jQuery.taxpicker == undefined) {
             jQuery.taxpicker = [];
+        }
 
         //create new TaxonomyPicker instance and increment index (in case we need to re-reference)
         options.taxPickerIndex = taxIndex;
         jQuery.taxpicker[taxIndex] = new TaxonomyPicker(this, options, ctx, changeCallback);
         taxIndex++;
     };
+
 })(CAMControl || (CAMControl = {}));
