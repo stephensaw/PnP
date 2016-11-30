@@ -1,409 +1,137 @@
-﻿var CAMControl;
+(function () {
+    'use strict';
 
-(function (CAMControl) {
+    var CAMControl = {};
     var spContext; //global sharepoint context used throughout the taxonomy picker control (set in the taxpicker constructor)
     var taxIndex = 0; //keeps index of the taxonomy pickers in use
 
-    //********************** START Term Class **********************
-    //constructor for Term
-    function Term(rawTerm) {
-        if (rawTerm != null) {
-            this.Id = rawTerm.get_id().toString(); //Id of the Term from SharePoint
-            this.Name = rawTerm.get_name(); //Default label for the term in SharePoint
-            this.PathOfTerm = rawTerm.get_pathOfTerm(); //label path of term delimited by semi-colons (ex: World;Europe;Finland)
-            this.Children = new Array(); //child terms of the term
-            this.Level = rawTerm.get_pathOfTerm().split(';').length - 1; //integer indicating the level of the term
-            this.RawTerm = rawTerm;
-        }
+    CAMControl.TAXONOMYENUM = {
+        TermStore: "TermStore",
+        Group: "Group",
+        TermSet: "TermSet",
+        Term: "Term"
+    };
+
+    function Term () {
+        this.id = "";
+        this.name = "";
+        this.termStoreId = "";
+        this.groupId = "";
+        this.termSetId = "";
+        this.anchorId = "";
+        this.anchorPath = "";
     }
 
-    jQuery.extend(Term.prototype, {
-        //creates a cloned copy of a term to avoid reference issues
-        clone: function () {
-            return new Term(this.RawTerm);
-        },
-        //converts a term to an html tree node
-        toHtmlLabel: function () {
-            var addlClass = (this.Children.length > 0) ? 'collapsed' : '';
-            return jQuery('<li class="cam-taxpicker-treenode-li"><div class="cam-taxpicker-treenode"><div class="cam-taxpicker-expander ' + addlClass + '"></div><img src="' + this.TermSet.TermSetImageUrl + '/EMMTerm.png" alt=""/><span class="cam-taxpicker-treenode-title"  data-item="' + this.Name + '|' + this.Id + '">' + this.Name + '</span></div></li>');
+    function CacheManager () {
+        var cachedData = {};
+
+        var setCache = function (cacheKey, data) {
+            cachedData[cacheKey] = data;
         }
-    });
 
-    //********************** END Term Class **********************
+        var getCache = function (cacheKey) {
+            return cachedData[cacheKey];
+        }
 
-    //********************** START TermSet Class **********************
-    //constructor for TermSet
-    function TermSet(options) {
-        this.Id = options.termSetId; //Id of the TermSet in SharePoint
-        this.UseHashtags = options.useHashtags; //bool indicating if the Hashtags termset is used during initalization
-        this.UseKeywords = options.useKeywords; //bool indicating if the Keywords termset is used during initalization
-        this.Terms = []; //Terms of the termset listed in a heirarchy (if applicable)
-        this.FlatTerms = []; //Flat representation of terms in the Termset
-        this.FlatTermsForSuggestions = [];
-        this.RawTermStores = null;
-        this.RawTerms = null; //Raw terms returned from CSOM
-        this.TermsLoaded = false; //boolean indicating if the terms have been returned and loaded from CSOM
-        this.OnTermsLoaded = null; //optional internal callback when terms are loaded
-        this.TermsLoadedCallback = options.termsLoadedCallback; //optional external callback when terms are loaded
-        this.KeyDownCallback = options.keyDownCallback; // optional external callback when term set text updated
-        this.RawTermSet = null; //Raw termset returned from CSOM
-        this.TermSetLoaded = false; //boolean indicating if the termset details are loaded
-        this.IsOpenForTermCreation = false; //bool indicating if the termset is open for new term creation
-        this.NewTerm = null; //the new term being added
+        var removeCache = function (cacheKey) {
+            cachedData[cacheKey] = null;
+        }
 
-        this.Name = options.termSetName; //name of the termset so we can retrive by name instead of id
-        this.TermSetImageUrl = options.termSetImageUrl; //url of the termset image
-        this.FilterTermId = options.filterTermId; // To support filter terms based on Id
-        this.LevelToShowTerms = options.levelToShowTerms; // show terms only till the specified level
-        this.UseTermSetasRootNode = options.useTermSetasRootNode //bool indicating if termset to be shown as root node or not
-    }
-
-    jQuery.extend(TermSet.prototype, {
-
-        initialize: function () {
-            var taxSession = SP.Taxonomy.TaxonomySession.getTaxonomySession(spContext);
-
-            this.RawTermStores = taxSession.get_termStores();
-            spContext.load(this.RawTermStores);
-            spContext.executeQueryAsync(Function.createDelegate(this, this.termStoresLoadedSuccess), Function.createDelegate(this, this.termStoresLoadeFailed));
-        },
-
-        termStoresLoadedSuccess: function () {
-            var termStoreEnumerator = this.RawTermStores.getEnumerator();
-
-            while (termStoreEnumerator.moveNext()) {
-                var termStore = termStoreEnumerator.get_current();
-
-                console.info(termStore.get_name(), termStore.get_id().toString());
+        var updateCache = function (cacheKey, data) {
+            if (!getCache(cacheKey)) {
+                setCache(cacheKey, data);
             }
+        }
+
+        return {
+            getCache: getCache,
+            setCache: setCache,
+            updateCache: updateCache,
+            removeCache: removeCache
+        }
+    }
+
+    function Taxonomy (options) {
+        this.TermStoreId = options.termStoreId;
+        this.GroupId = options.groupId;
+        this.TermSetId = options.termSetId;
+        this.AnchorId = options.anchorId;
+        this.AnchorPath = options.anchorPath;
+        this.Loaded = false; //boolean indicating if the terms have been returned and loaded from CSOM
+        this.KeyDownCallback = options.keyDownCallback; // optional external callback when term set text updated
+        this.TermSetLoaded = false; //boolean indicating if the termset details are loaded
+        this.NewTerm = null; //the new term being added
+        this.CacheManager = null;
+    }
+
+    jQuery.extend(Taxonomy.prototype, {
+        initialize: function () {
+            this.CacheManager = new CacheManager();
         },
 
-        termStoresLoadeFailed: function (e) {
-            console.error("Failed to log term stores", e);
+        executeQuery: function (item) {
+            var $deferred = jQuery.Deferred();
+
+            spContext.executeQueryAsync(Function.createDelegate(this, function () {
+                $deferred.resolve(item);
+            }), Function.createDelegate(this, function (sender, args) {
+                $deferred.reject(sender, args);
+            }));
+
+            return $deferred.promise();
+        },
+
+        loadTermStores: function () {
+            var taxSession = SP.Taxonomy.TaxonomySession.getTaxonomySession(spContext);
+            var termStores = taxSession.getDefaultSiteCollectionTermStore();
+
+            spContext.load(termStores);
+            return this.executeQuery(termStores);
         },
 
         loadGroups: function (termStore) {
             var groups = termStore.get_groups();
 
-            spContext.load(groups);
-            spContext.executeQueryAsync(Function.createDelegate(this, function () {
-                this.groupsLoadedSuccess(groups);
-            }), Function.createDelegate(this, this.groupsLoadedFailed));
-        },
-
-        groupsLoadedSuccess: function (groups) {
-            var groupsEnumerator = groups.getEnumerator();
-
-            while (groupsEnumerator.moveNext()) {
-                var group = groupsEnumerator.get_current();
-
-                console.info(group.get_name(), group.get_id().toString());
-            }
-        },
-
-        groupsLoadedFailed: function (e) {
-            console.error("Failed to load groups", e);
+            spContext.load(groups, "Include(Id, Name)");
+            return this.executeQuery(groups);
         },
 
         loadTermSets: function (group) {
             var termSets = group.get_termSets();
 
-            spContext.load(termSets);
-            spContext.executeQueryAsync(Function.createDelegate(this, function () {
-                this.termSetsLoadedSuccess(termSets);
-            }), Function.createDelegate(this, this.termSetsLoadedFailed));
-        },
-
-        termSetsLoadedSuccess: function (termSets) {
-            var termSetsEnumerator = termSets.getEnumerator();
-
-            while (termSetsEnumerator.moveNext()) {
-                var termSet = termSetsEnumerator.get_current();
-
-                console.info("  > " + termSet.get_name());
-            }
-        },
-
-        termSetsLoadedFailed: function (e) {
-            console.error("Failed to load term sets", e);
-        },
-
-        //internal callback when terms are returned from CSOM
-        termsLoadedSuccess: function () {
-            //set termset properties
-            this.Name = this.RawTermSet.get_name();
-            this.IsOpenForTermCreation = this.RawTermSet.get_isOpenForTermCreation();
-
-            //get the enumerator for terms list
-            var termEnumerator = this.RawTerms.getEnumerator();
-
-            //get flat list of terms
-            this.FlatTerms = new Array();
-                        
-            var sortOrder = null;
-
-            var topLevel = 0;
-
-            while (termEnumerator.moveNext()) {
-                var currentTerm = termEnumerator.get_current();
-                if (!currentTerm.get_isDeprecated()) {
-                    var term = new Term(currentTerm);
-                    this.FlatTerms.push(term);
-                }
-            }
-
-            //get the custom sort order of the termset
-            if (this.RawTermSet.get_customSortOrder()) {
-                sortOrder = this.RawTermSet.get_customSortOrder();
-            }
-
-            if (sortOrder) {
-                //the custom sort order is a GUID string, separated by :
-                sortOrder = sortOrder.split(':');
-
-                this.FlatTerms.sort(function (a, b) {
-                    if (a.Level > topLevel) { topLevel = a.Level; }
-                    // finding the index of GUID in array, and using it to sort
-                    var indexA = sortOrder.indexOf(a.guid);
-                    var indexB = sortOrder.indexOf(b.guid);
-
-                    if (indexA > indexB) { return 1; }
-                    else if (indexA < indexB) { return -1; }
-                    return 0;
-                });
-            }
-            else {
-                //sort by Name that all of the choice will return alphabetically
-                this.FlatTerms.sort(function (a, b) {
-                    if (a.Level > topLevel) { topLevel = a.Level; }
-                    a = a.Name.toLowerCase();
-                    b = b.Name.toLowerCase();
-                    if (a < b) return -1;
-                    else if (a > b) return 1;
-                    return 0;
-                });
-            }
-
-
-            var filterTerm;
-            if (this.FilterTermId != null && this.FilterTermId) {
-                filterTerm = this.getTermById(this.FilterTermId);
-            }
-
-            //build a hierarchical representation of Terms by iterating through all of the terms for each level
-            for (var currentLevel = 0; currentLevel <= topLevel; currentLevel++) {
-                if (this.LevelToShowTerms > currentLevel || typeof (this.LevelToShowTerms) === 'undefined') {
-                    for (var i = 0; i < this.FlatTerms.length; i++) {
-                        var term = this.FlatTerms[i];
-                        if (term.Level == currentLevel) {
-                            var path = term.PathOfTerm.split(';');
-                            if (
-                                ((path.length == this.LevelToShowTerms && this.FilterTermId != null && this.FilterTermId == term.Id) ||
-                                (this.FilterTermId != null && term.PathOfTerm.indexOf(filterTerm.Name) > -1 && this.LevelToShowTerms - 1 == term.Level)
-
-                                ) || typeof (filterTerm) == 'undefined') {
-
-                                if (currentLevel == 0) {
-                                    this.Terms.push(term.clone());
-                                    this.FlatTermsForSuggestions.push(term);
-                                }
-                                else {
-                                    this.getTermParentCollectionByPath(term.PathOfTerm).push(term);
-                                    this.FlatTermsForSuggestions.push(term);
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            //mark as terms loaded
-            this.TermsLoaded = true;
-
-            //call OnTermsLoaded event if not null
-            if (this.OnTermsLoaded != null)
-                this.OnTermsLoaded();
-
-            //call TermsLoadedCallback event if not null
-            if (this.TermsLoadedCallback != null)
-                this.TermsLoadedCallback();
-        },
-
-        //internal callback when failed CSOM query occurs getting terms
-        termsLoadedFailed: function (event, args) {
-            //display error message to user
-            alert(TaxonomyPickerConsts.TERMSET_LOAD_FAILED);
+            spContext.load(termSets, "Include(Id, Name)");
+            return this.executeQuery(termSets);
         },
 
         loadTerms: function (termSet) {
             var terms = termSet.get_terms();
 
-            spContext.load(terms);
-            spContext.executeQueryAsync(Function.createDelegate(this, function () {
-                this.termsLoadedSuccess(terms);
-            }), Function.createDelegate(this, this.termsLoadedFailed));
-        },
-
-        termsLoadedSuccess: function (terms) {
-            var termsEnumerator = terms.getEnumerator();
-
-            while (termsEnumerator.moveNext()) {
-                var term = termsEnumerator.get_current();
-
-                console.info("          > " + term.get_name());
-            }
-        },
-
-        termsLoadedFailed: function (e) {
-            console.error("Failed to load terms", e);
-        },
-
-        //gets a term parent collection based on the path passed in (ex: World;Europe;Finland would return the Europe term)
-        getTermParentCollectionByPath: function (path) {
-            var term = null;
-            var termPath = null;
-            var parts = path.split(';');
-            var termList = this.Terms;
-
-            for (var i = 0; i < parts.length - 1; i++) {
-                for (var j = 0; j < termList.length; j++) {
-                    term = termList[j];
-                    termPath = term.PathOfTerm.split(';')
-                    if (termPath.length > 0 && parts[i] == termPath[termPath.length - 1]) {
-                        termList = term.Children;
-                        break;
-                    }
-                }
-            }
-
-            return termList;
-        },
-
-        //get suggestions based on the values typed by user
-        getSuggestions: function (text) {
-            var matches = new Array();
-            jQuery(this.FlatTermsForSuggestions).each(function (i, e) {
-                if (e.Name.toLowerCase().indexOf(text.toLowerCase()) == 0) {
-                    matches.push(e);
-                }
-            });
-            return matches;
-        },
-
-        getContainsSuggestions: function (text, useContainsSuggestions) {
-            var matches = new Array();
-            jQuery(this.FlatTermsForSuggestions).each(function (i, e) {
-                if (e.Name.toLowerCase().indexOf(text.toLowerCase()) >= 0) {
-                    matches.push(e);
-                }
-            });
-            return matches;
-        },
-
-        //get a term by id
-        getTermById: function (id) {
-            for (var i = 0; i < this.FlatTerms.length; i++) {
-                if (this.FlatTerms[i].Id == id)
-                    return this.FlatTerms[i];
-            }
-
-            return null;
-        },
-
-        //get a term by label match
-        getTermsByLabel: function (label) {
-            var matches = new Array();
-            for (var i = 0; i < this.FlatTerms.length; i++) {
-                if (this.FlatTerms[i].Name.toLowerCase() == label.toLowerCase())
-                    matches.push(this.FlatTerms[i]);
-            }
-
-            return matches;
-        },
-
-        //adds a new term to the the root of a termset or as a child of another term
-        addTerm: function (label, taxpicker, parentTermId) {
-            var parent = null;
-            if (parentTermId == undefined) {
-                //add Term to termset
-                parent = this.RawTermSet;
-            }
-            else {
-                //find the parent term in the RawTerms
-                for (var i = 0; i < this.FlatTerms.length; i++) {
-                    var pt = this.FlatTerms[i];
-                    if (pt.Id == parentTermId) {
-                        parent = pt;
-                    }
-                }
-            }
-
-            //make sure the term label doesn't already exist at this level
-            if (this.termExists((parentTermId == undefined) ? label : parent.Name + ';' + label))
-                taxpicker.termAddFailed(null, null);
-            else {
-                //create the term
-                var id = newGuid();
-
-                //handle root terms
-                if (parentTermId == undefined) {
-                    //initialize the parent as the termset collection
-                    parent = {};
-                    parent.RawTerm = this.RawTermSet;
-                }
-                this.NewTerm = parent.RawTerm.createTerm(label, taxpicker.LCID, id);
-                spContext.load(this.NewTerm);
-                spContext.executeQueryAsync(Function.createDelegate(taxpicker, taxpicker.termAddSuccess),
-                    Function.createDelegate(taxpicker, taxpicker.termAddFailed));
-            }
-        },
-
-        //checks if a term exists with the the path passed in
-        termExists: function (pathOfTerm) {
-            var termFound = false;
-            for (var i = 0; i < this.FlatTerms.length; i++) {
-                if (this.FlatTerms[i].PathOfTerm.toLowerCase() == pathOfTerm.toLowerCase()) {
-                    termFound = true;
-                    break;
-                }
-            }
-
-            return termFound;
+            spContext.load(terms, "Include(Id, Name, TermsCount)");
+            return this.executeQuery(terms);
         }
     });
-    //********************** End TermSet Class **********************
 
-    //********************** START TaxonomyPicker Class **********************
-    //constructor for TaxonomyPicker
-    function TaxonomyPicker(control, options, context, changeCallback) {
-        this.TermSet = new TermSet(options); //the termset the taxonomy picker is bound to...loaded in the inialize function
+    function TaxonomyPicker (control, options, context) {
+        this.Taxonomy = new Taxonomy(options);
 
         this._context = context; //Context passed in from control
-        this._changeCallback = changeCallback; //event callback for when the control value changes
         this.LCID = (options.lcid) ? options.lcid : 1033; //the locale id for term creation (default is 1033)
-        this.Language = (options.language) ? options.language : 'en-us'; //the language code for the control (default is en-us)
+        this.LanguageResource = options.languageResource;
         this.MarkerMarkup = '<span id="caretmarker"></span>'; //the marketup const
         this._taxPickerIndex = options.taxPickerIndex; //the index within the jQuery.taxpicker array
         this._isMulti = options.isMulti; //specifies if the user can select multiple terms
         this._isReadOnly = options.isReadOnly; //specifies whether the control is used for display purposes 
-        this._allowFillIn = options.allowFillIn; //specifies if the user can add new terms (only applies to Open Termsets)
-        this._enterFillIn = options.enterFillIn; //specifies if the user can add new terms just click on enter (not taxonomy picker dialog needed)
-        this._termSetId = options.termSetId; //the termset id to bind the control to
-        this._termSetName = options.termSetName; //the termset id to bind the control to
-        this._useHashtags = options.useHashtags; //indicates that the hashtags termset should be used tp bind the control
-        this._useKeywords = options.useKeywords; //indicates that the keywords termset should be used to bind the control
         this._initialValue = control.val(); //the initial value of the control
-        this._maxSuggestions = (options.maxSuggestions) ? options.maxSuggestions : 10; //maximum number of suggestions to load...default is 10
-        this._useContainsSuggestions = options.useContainsSuggestions; //specifies if search for suggestions should find matches with *word* pattern. Default pattern word*
-
         this._control = control; //the wrapper container all the taxonomy pickers controls are contained in
+        
         this._dlgButton = null; //the button used to launch the taxonomy picker dialog
         this._editor = null; //the editor control for the taxonomy picker
-        this._suggestionContainer = null; //the suggestions container for the taxonomy picker
         this._hiddenValidated = control; //the hidden control that contains all validated term selections
         this._waitingDlg = null; //the waiting dialog
-        this._selectedTerms = new Array(); //Array of selected terms
-        this._tempSelectedTerms = new Array(); //Snapshot of selected terms for use in the picker dialog (kept to support cancel in the dialog)
+        this._selectedTerms = []; //Array of selected terms
+        this._tempSelectedTerms = []; //Snapshot of selected terms for use in the picker dialog (kept to support cancel in the dialog)
+        this._expandingNodes = false;
+        this._controlMode = options.mode !== undefined ? options.mode.toLowerCase() : "designer";
 
         this._dialog = null; //the dialog control
         this._dlgCurrTerm = null; //the current term highlighted in the taxonomy picker dialog
@@ -417,88 +145,67 @@
         this._dlgNewNode; //container for a new node added to an Open Termset in the taxonomy picker dialog
         this._dlgNewNodeEditor; //the editor field for add new node in the taxonomy picker dialog
 
-        //initialize the taxonomy picker
         this.initialize();
     }
 
     jQuery.extend(TaxonomyPicker.prototype, {
-        //initializes the taxonomy picker
         initialize: function () {
-            this.TermSet.initialize(); //initialize the termset to populate available terms
+            this.Taxonomy.initialize();
 
-            //get script path so we can load translation files
-            var scriptUrl = '';
-            var scriptRevision = '';
-            jQuery('script').each(function (i, el) {
-                if (el.src.toLowerCase().indexOf('taxonomypickercontrol.js') > -1) {
-                    scriptUrl = el.src;
-                    scriptRevision = scriptUrl.substring(scriptUrl.indexOf('.js') + 3);
-                    scriptUrl = scriptUrl.substring(0, scriptUrl.indexOf('.js'));
-                }
-            });
-
-            //load translation files
-            if (typeof CAMControl.resourceLoaded == 'undefined') {
-                CAMControl.resourceLoaded = false;
-                var resourceFileName = scriptUrl + '_resources.' + this.Language.substring(0, 2).toLowerCase() + '.js';
-
-                jQuery.ajax({
-                    dataType: "script",
-                    cache: true,
-                    url: resourceFileName
-                }).done(function () {
-                    CAMControl.resourceLoaded = true;
-                }).fail(function () {
-                    alert('Could not load the resource file ' + resourceFileName);
-                });
-            }
-
-            //create a new wrapper for the control using a div
             this._control = jQuery('<div class="cam-taxpicker"></div>');
 
-            //detach the hidden field from the parent and append to the wrapper
             var parent = this._hiddenValidated.parent();
+
             this._hiddenValidated = this._hiddenValidated.detach();
             parent.append(this._control);
-            this._suggestionContainer = jQuery('<div class="cam-taxpicker-suggestion-container"></div>');
-            if (!this._enterFillIn){
-            	this._dlgButton = jQuery('<div class="cam-taxpicker-button"></div>');
+            
+            if (!this._enterFillIn) {
+                this._dlgButton = jQuery('<div class="cam-taxpicker-button"></div>');
             }
+
             if (!this._isReadOnly) {
                 this._editor = jQuery('<div class="cam-taxpicker-editor" contenteditable="true"></div>');
                 this._control.empty().append(this._editor).append(this._dlgButton).append(this._hiddenValidated);
                 this._control.after(this._suggestionContainer);
-            }
-            else {
-
+            } else {
                 this._editor = jQuery('<div class="cam-taxpicker-editor-readonly" contenteditable="false"></div>');
                 this._control.empty().append(this._editor).append(this._hiddenValidated);
             }
 
             //initialize value if it exists
             if (this._initialValue != undefined && this._initialValue.length > 0) {
-                var terms = JSON.parse(this._initialValue);
-                for (var i = 0; i < terms.length; i++) {
-                    //add the term to selected terms array
-                    var t = new Term(null);
-                    t.Id = terms[i].Id;
-                    t.Name = terms[i].Name;
-                    this._selectedTerms.push(t);
+                if (this._controlMode === "designer") {
+                    var terms = JSON.parse(this._initialValue);
+
+                    for (var i = 0; i < terms.length; i++) {
+                        var t = JSON.parse(JSON.stringify(terms[i]));
+                    
+                        this._selectedTerms.push(t);
+                    }
+                } else {
+                    var terms = this._initialValue.split(";");
+
+                    for (var i = 0; i < terms.length; i++) {
+                        var term = terms[i].split("|");
+                        var selectedTerm = new Term();
+
+                        selectedTerm.id = term[1];
+                        selectedTerm.name = term[0];
+
+                        this._selectedTerms.push(selectedTerm);
+                    }
                 }
+
                 this._editor.html(this.selectedTermsToHtml());
             }
 
-            //wire up control events
-            if (!this._enterFillIn){
-            	this._dlgButton.click(Function.createDelegate(this, this.showPickerDialog)); //dialog button is clicked
-            }
+            this._dlgButton.click(Function.createDelegate(this, this.showPickerDialog)); //dialog button is clicked
             this._editor.keydown(Function.createDelegate(this, this.keydown)); //key is pressed in the editor control
             jQuery(document).mousedown(Function.createDelegate(this, this.checkExternalClick)); //mousedown somewhere in the document
         },
 
-        //handle reset
         reset: function () {
-            this._selectedTerms = new Array();
+            this._selectedTerms = [];
             this._editor.html('');
         },
 
@@ -573,8 +280,8 @@
                     }
 
                     //call keyDownCallback event if not null
-                    if (this.TermSet.KeyDownCallback != null)
-                        this.TermSet.KeyDownCallback();
+                    if (this.Taxonomy.KeyDownCallback != null)
+                        this.Taxonomy.KeyDownCallback();
 
                     //set the cursor position at the marker
                     this.setCaret();
@@ -609,8 +316,8 @@
                 this._editor.html(textValidation.html);
 
                 //call keyDownCallback event if not null
-                if (this.TermSet.KeyDownCallback != null)
-                    this.TermSet.KeyDownCallback();
+                if (this.Taxonomy.KeyDownCallback != null)
+                    this.Taxonomy.KeyDownCallback();
 
                 //set the cursor position at the marker
                 this.setCaret();
@@ -751,28 +458,28 @@
 
         //place the cursor at the end of the contentEditable div
         placeCaretAtEnd: function (el) {
-		    el.focus();
-		    if (typeof window.getSelection != "undefined"
-		            && typeof document.createRange != "undefined") {
-		        var range = document.createRange();
-		        range.selectNodeContents(el);
-		        range.collapse(false);
-		        var sel = window.getSelection();
-		        sel.removeAllRanges();
-		        sel.addRange(range);
-		    } else if (typeof document.body.createTextRange != "undefined") {
-		        var textRange = document.body.createTextRange();
-		        textRange.moveToElementText(el);
-		        textRange.collapse(false);
-		        textRange.select();
-		    }
+            el.focus();
+            if (typeof window.getSelection != "undefined"
+                    && typeof document.createRange != "undefined") {
+                var range = document.createRange();
+                range.selectNodeContents(el);
+                range.collapse(false);
+                var sel = window.getSelection();
+                sel.removeAllRanges();
+                sel.addRange(range);
+            } else if (typeof document.body.createTextRange != "undefined") {
+                var textRange = document.body.createTextRange();
+                textRange.moveToElementText(el);
+                textRange.collapse(false);
+                textRange.select();
+            }
         },
 
         //validates the text input into ranges and html output
         validateText: function (txt) {
             var textValidation = { html: '', ranges: [] };
             var terms = txt.split(';');
-            var newTerms = new Array();
+            var newTerms = [];
             var ptr = 0;
             var rPtr = 0;
 
@@ -780,10 +487,10 @@
             for (var i = 0; i < terms.length; i++) {
                 var t = terms[i].replace(/^\s+/, ""); //trim left
                 var t_compare = t.replace(this.MarkerMarkup, '');
-                var r = { text: t, bottom: rPtr, top: (rPtr + t.length - 1), valid: false };
+                var r = { id: terms[i].id, text: t, bottom: rPtr, top: (rPtr + t.length - 1), valid: false };
                 rPtr = r.top;
                 for (var j = ptr; j < this._selectedTerms.length; j++) {
-                    if (this._selectedTerms[j].Name.toLowerCase() == t_compare.toLowerCase()) {
+                    if (this._selectedTerms[j].name.toLowerCase() == t_compare.toLowerCase()) {
                         newTerms.push(this._selectedTerms[j]);
                         r.valid = true;
                         ptr = j + 1;
@@ -808,45 +515,45 @@
             }
             //reset this._selectedTerms
             this._selectedTerms = newTerms;
-            this._hiddenValidated.val(JSON.stringify(this._selectedTerms));
+            this._hiddenValidated.val(this.getSelectedTermsValue(this._selectedTerms));
 
             return textValidation;
         },
 
         //marks text input with valid and invalid markup
         markInvalidTerms: function (textValidation) {
+            return;
+
             var html = '';
             for (var i = 0; i < textValidation.ranges.length; i++) {
                 if (textValidation.ranges[i].valid)
                     html += '<span class="cam-taxpicker-term-selected">' + textValidation.ranges[i].text + '</span>';
                 else {
                     //check for a single match we can validate against
-                    var matches = this.TermSet.getTermsByLabel(textValidation.ranges[i].text);
+                    var matches = this.Taxonomy.getTermsByLabel(textValidation.ranges[i].text);
                     if (matches.length == 1 && (this._selectedTerms.length == 0 || this._isMulti)) {
                         this.pushSelectedTerm(matches[0]);
                         html += '<span class="cam-taxpicker-term-selected">' + textValidation.ranges[i].text + '</span>';
                     }
                     else {
-                    	//
-                    	if (this._enterFillIn){
-                    		//new term
-                    		var termNew = new Term(null);
-                    		var id = newGuid();
-                    		termNew.Id = id;
-                    		termNew.Name =  textValidation.ranges[i].text;
-                       		
-                       		this._selectedTerms.push(termNew);
-                			this._hiddenValidated.val(JSON.stringify(this._selectedTerms));
-                			
-                			this.pushSelectedTerm(termNew);
+                        if (this._enterFillIn){
+                            var termNew = new Term();
+                            var id = newGuid();
 
-                    		html += '<span class="cam-taxpicker-term-selected">' + textValidation.ranges[i].text + '</span>';
+                            termNew.id = id;
+                            termNew.name =  textValidation.ranges[i].text;
+                            
+                            this._selectedTerms.push(termNew);
+                            this._hiddenValidated.val(JSON.stringify(this._selectedTerms));
+                            
+                            this.pushSelectedTerm(termNew);
+
+                            html += '<span class="cam-taxpicker-term-selected">' + textValidation.ranges[i].text + '</span>';
                         }
                         else{
-                        	html += '<span class="cam-taxpicker-term-invalid">' + textValidation.ranges[i].text + '</span>';                  
+                            html += '<span class="cam-taxpicker-term-invalid">' + textValidation.ranges[i].text + '</span>';                  
                         }
-					}
-
+                    }
 
                     //check for ambiguous matches
                     if (matches.length > 1) {
@@ -860,113 +567,81 @@
             return html;
         },
 
-        //shows suggestions based on the unvalidated text being entered
-        showSuggestions: function (textValidation, caret) {
-            //find the unvalidated text the cursor is in
-            var range = null;
-            for (var i = 0; i < textValidation.ranges.length; i++) {
-                if (caret >= textValidation.ranges[i].bottom && caret <= textValidation.ranges[i].top) {
-                    if (!textValidation.ranges[i].valid) {
-                        range = textValidation.ranges[i];
-                    }
-                    break;
-                }
-            }
-            if (range != null && this.TermSet.TermsLoaded) {
-                var txt = range.text;
-
-                //clear the marker from the txt
-                txt = txt.replace(this.MarkerMarkup, '');
-
-                if (txt.length > 0) {
-                    //look for all matching suggestions
-                    var suggestions = this._useContainsSuggestions ? this.TermSet.getContainsSuggestions(txt) : this.TermSet.getSuggestions(txt);
-
-                    //trim suggestions based on what is already in this._selectedTerms
-                    suggestions = this.trimSuggestions(suggestions);
-
-                    this._suggestionContainer.empty().append(jQuery('<div class="cam-taxpicker-suggestion-title">' + TaxonomyPickerConsts.SUGGESTIONS_HEADER + '</div>'));
-                    if (suggestions.length > 0) {
-                        jQuery(suggestions).each(Function.createDelegate(this, function (i, e) {
-                            if (i < this._maxSuggestions) {
-                                var startOfMatchIndex = e.Name.toLowerCase().indexOf(txt.toLowerCase());
-                                var match = e.Name.substring(startOfMatchIndex, startOfMatchIndex + txt.length); //get the matched text so we can highlight it
-                                var labels = e.RawTerm.get_labels().getEnumerator();
-                                var labelStr = "";
-                                while (labels.moveNext()) {
-                                    var label = labels.get_current();
-                                    if (!label.get_isDefaultForLanguage()) {
-                                        labelStr += "," + label.get_value();
-                                    }
-                                }
-                                var hightlightedText = this._useContainsSuggestions ? getContainsWithHighlightedText(e.Name, match) : getStartingWithHighlightedText(e.Name, match);
-                                var itemHtml = jQuery('<div class="cam-taxpicker-suggestion-item" data-item="' + e.Id + '">' + hightlightedText + ' [' + this.TermSet.Name + ':' + e.PathOfTerm.replace(/;/g, ':') + labelStr + ']</div>');
-                                this._suggestionContainer.append(itemHtml);
-                                itemHtml.click(Function.createDelegate(this, this.suggestionClicked));
-                            }
-                        }));
-                        this._suggestionContainer.show();
-                    }
-                    else {
-                        this._suggestionContainer.hide();
-                    }
-                }
-                else {
-                    this._suggestionContainer.hide();
-                }
-            }
-            else
-                this._suggestionContainer.hide();
-        },
-
-        //term node add is canceled
-        termNodeAddCancel: function (event) {
-            //remove the expand/collapse image if needed
-            if (this._dlgCurrTermNode != null && this._dlgCurrTermNode.parent().next().children().length <= 1) {
-                this._dlgCurrTermNode.prev().prev().removeClass('collapsed');
-                this._dlgCurrTermNode.prev().prev().removeClass('expanded');
-            }
-
-            //cancel the add by removing the new term
-            if (this._dlgNewNode != null)
-                this._dlgNewNode.remove();
-        },
-
         //term node is clicked in the treeview
         termNodeClicked: function (event) {
-            //clear any term that was in the middle of an add
-            this.termNodeAddCancel(event);
+            this._dlgCurrTermNode = jQuery(event.target.parentNode);
 
-            //set the _dlgCurrTermNode
-            this._dlgCurrTermNode = jQuery(event.target);
+            if (!this._dlgCurrTermNode.data("selectable")) {
+                this._dlgCurrTerm = null;
+                return;
+            }
 
             //change the style of the node to selected
             jQuery('.cam-taxpicker-treenode-title').removeClass('selected');
-            jQuery(event.target).addClass('selected');
+            this._dlgCurrTermNode.addClass('selected');
 
-            //ignore events from root
-            if (!jQuery(event.target).hasClass('root')) {
-                //get the term clicked and set currNode
-                var itemdata = jQuery(event.target).attr('data-item').split('|');
-                this._dlgCurrTerm = this.TermSet.getTermById(itemdata[1]);
-            }
-            else
-                this._dlgCurrTerm = null;
+            //get the term clicked and set currNode
+            var id = this._dlgCurrTermNode.data("id");
+            var cachedTerm = this.Taxonomy.CacheManager.getCache(id).item;
+            var term = new Term();
+
+            term.id = cachedTerm.get_id().toString();
+            term.name = cachedTerm.get_name();
+            
+            this._dlgCurrTerm = term;
         },
 
         //term node is double clicked in the treeview
         termNodeDoubleClicked: function (event) {
-            //clear any term that was in the middle of an add
-            this.termNodeAddCancel(event);
+            this._dlgCurrTermNode = jQuery(event.target.parentNode);
 
-            //set the _dlgCurrTermNode
-            this._dlgCurrTermNode = jQuery(event.target);
+            var term = new Term();
 
-            //ignore events from root
-            if (!jQuery(event.target).hasClass('root')) {
-                //get the term clicked
-                var itemdata = jQuery(event.target).attr('data-item').split('|');
-                term = this.TermSet.getTermById(itemdata[1]);
+            term.id = this._dlgCurrTermNode.data("id");
+            term.name = this._dlgCurrTermNode.data("name");
+
+            this.addHighlightedTermToSelection(term);
+        },
+
+        addHighlightedTermToSelection: function (term) {
+            if (this._dlgCurrTermNode.data("selectable")) {
+                var parentNodes = this._dlgCurrTermNode.closest("li").parents("li");
+                var paths = [];
+
+                // building paths from the selected node parents backward
+                for (var i = parentNodes.length - 1; i >= 0 ; i--) {
+                    var $node = jQuery(parentNodes[i]).find(".cam-taxpicker-treenode-title");
+
+                    paths.push($node.data("id"));
+                }
+
+                paths.push(this._dlgCurrTermNode.data("id"));
+
+                var term = new Term();
+
+                term.id = this._dlgCurrTermNode.data("id");
+                term.name = this._dlgCurrTermNode.data("name");
+                
+                if (this._dlgCurrTermNode.data("type") === CAMControl.TAXONOMYENUM.Term) {
+                    term.anchorId = this.id;
+                }
+
+                if (paths.length >= 1) {
+                    term.termStoreId = paths[0];
+                }
+
+                if (paths.length >= 2) {
+                    term.groupId = paths[1];
+                }
+
+                if (paths.length >= 3) {
+                    term.termSetId = paths[2];
+                }
+
+                if (paths.length >= 4) {
+                    paths.splice(0, 3);
+                    term.anchorPath = paths.join("/");
+                }
 
                 //add the term to selected terms array
                 this.pushSelectedTerm(term);
@@ -979,11 +654,7 @@
         //dialog select button is clicked...use this to add any selected node as a selected term
         dialogSelectButtonClicked: function (event) {
             if (this._dlgCurrTerm != null) {
-                //add the term to selected terms array
-                this.pushSelectedTerm(this._dlgCurrTerm);
-
-                //refresh the html in the editor control
-                this._dlgEditor.html(this.selectedTermsToHtml());
+                this.addHighlightedTermToSelection(this._dlgCurrTerm);
             }
         },
 
@@ -1014,10 +685,10 @@
                 return;
 
             this._dlgNewNodeEditor = jQuery('<div class="cam-taxpicker-treenode-newnode" style="min-width: 100px;" contenteditable="true"></div>');
-            this._dlgNewNode = jQuery('<li class="cam-taxpicker-treenode-li newNode"></li>').append(jQuery('<div class="cam-taxpicker-treenode"></div>').append('<div class="cam-taxpicker-expander"></div><img src="' + this.TermSet.TermSetImageUrl + '/EMMTerm.png" alt=""/>').append(this._dlgNewNodeEditor));
+            this._dlgNewNode = jQuery('<li class="cam-taxpicker-treenode-li newNode"></li>').append(jQuery('<div class="cam-taxpicker-treenode"></div>').append('<div class="cam-taxpicker-expander"></div><img src="' + this.Taxonomy.TermSetImageUrl + '/EMMTerm.png" alt=""/>').append(this._dlgNewNodeEditor));
 
             // only one level allowed for keywords, so always add to the root
-            if (this.TermSet.UseKeywords || this._dlgCurrTerm == null) {
+            if (this.Taxonomy.UseKeywords || this._dlgCurrTerm == null) {
                 jQuery('.cam-taxpicker-treenode-title').removeClass('selected');
                 var root = jQuery('.cam-taxpicker-treenode-title.root').first();
                 root.addClass('selected');
@@ -1059,9 +730,9 @@
                     txt = '#' + txt;
 
                 if (this._dlgCurrTerm != null)
-                    this.TermSet.addTerm(txt, this, this._dlgCurrTerm.Id);
+                    this.Taxonomy.addTerm(txt, this, this._dlgCurrTerm.id);
                 else
-                    this.TermSet.addTerm(txt, this);
+                    this.Taxonomy.addTerm(txt, this);
 
                 //cancel the keypress for Enter
                 if (keynum == 13)
@@ -1069,216 +740,412 @@
             }
         },
 
-        //successful callback from creating a new term
-        termAddSuccess: function (event, args) {
-            //add the new term to all applicable collections
-            var newTerm = new Term(this.TermSet.NewTerm);
-            this.TermSet.FlatTerms.push(newTerm); //add to the flat terms list
-            var parentTerm = this.TermSet.getTermParentCollectionByPath(newTerm.PathOfTerm);
-            parentTerm.push(newTerm.clone());//add to the hierarchy terms list
-
-            //get the container and replace the new node with a non-editable node
-            var ul = this._dlgNewNode.parent();
-            this._dlgNewNode.remove();
-            var newNode = newTerm.toHtmlLabel();
-            ul.prepend(newNode);
-
-            //change the style to selected and wire events
-            jQuery('.cam-taxpicker-treenode-title').removeClass('selected');
-            var title = newNode.find('.cam-taxpicker-treenode-title');
-            title.addClass('selected');
-            title.click(Function.createDelegate(this, this.termNodeClicked));
-            title.dblclick(Function.createDelegate(this, this.termNodeDoubleClicked));
-
-            //set the _dlgCurrTermNode and _dlgCurrTerm
-            this._dlgCurrTermNode = title; // title node as current node
-            this._dlgCurrTerm = newTerm;
-        },
-
-        //failed callback from trying to create a new term
-        termAddFailed: function (event, args) {
-            //remove the expand/collapse image if needed
-            if (this._dlgCurrTermNode.parent().next().children().length <= 1) {
-                this._dlgCurrTermNode.prev().prev().removeClass('collapsed');
-                this._dlgCurrTermNode.prev().prev().removeClass('expanded');
-            }
-
-            //cancel the add by removing the new term
-            this._dlgNewNode.remove();
-        },
-
-        //fires when a user selected a suggested term in the suggestions list
-        suggestionClicked: function (event) {
-            var obj = jQuery(event.target);
-            //check sender type...move up to parent if this is a span
-            if (obj[0].tagName == 'SPAN')
-                obj = obj.parent();
-
-            //get the termId from the data-item attribute of the target
-            var termId = obj.attr('data-item');
-            //get the term from the termset in memory
-            var term = this.TermSet.getTermById(termId);
-            //add the term to selected terms array
-            this.pushSelectedTerm(term);
-
-            //refresh the html in the editor control
-            this._editor.html(this.selectedTermsToHtml());
-            this._suggestionContainer.hide();
-            this._editor.focus();
-
-            if (this._changeCallback != null)
-                this._changeCallback();
-        },
-
         //used to check if focus is lost from the control (invalidate and hide suggestions)
         checkExternalClick: function (event) {
             //check if the target is outside the picker
-            if (!jQuery.contains(this._control[0], event.target) && !jQuery.contains(this._suggestionContainer[0], event.target) && this._dialog != null && !jQuery.contains(this._dialog[0], event.target)) {
+            if (!jQuery.contains(this._control[0], event.target) && this._dialog != null && !jQuery.contains(this._dialog[0], event.target)) {
                 var rawText = this._editor.text(); //the raw text in the editor (html stripped out)
                 var textValidation = this.validateText(rawText); //get the text validation
-                var html = this.markInvalidTerms(textValidation); //mark invalid terms
-                this._editor.html(html); //set the editor
-                this._suggestionContainer.hide(); //hide suggestions
+                //var html = this.markInvalidTerms(textValidation); //mark invalid terms
+                //this._editor.html(html); //set the editor
             }
         },
 
         //show the dialog picker
         showPickerDialog: function (event) {
-            //check to make sure the termset has loaded
-            if (!this.TermSet.TermsLoaded) {
-                this.TermSet.OnTermsLoaded = Function.createDelegate(this, this.showPickerDialog);
+            //capture what terms are current selected (so we can support cancel)
+            this._tempSelectedTerms = this._selectedTerms.slice(0);
 
-                //add the waiting indicator to the body
-                this._waitingDlg = jQuery('<div class="cam-taxpicker-waiting"><div class="cam-taxpicker-waiting-overlay"></div><div class="cam-taxpicker-waiting-dlg"><div class="cam-taxpicker-waiting-dlg-inner"><img alt="" src="data:image/gif;base64,R0lGODlhEAAQAIAAAFLOQv///yH/C05FVFNDQVBFMi4wAwEAAAAh+QQFCgABACwJAAIAAgACAAACAoRRACH5BAUKAAEALAwABQACAAIAAAIChFEAIfkEBQoAAQAsDAAJAAIAAgAAAgKEUQAh+QQFCgABACwJAAwAAgACAAACAoRRACH5BAUKAAEALAUADAACAAIAAAIChFEAIfkEBQoAAQAsAgAJAAIAAgAAAgKEUQAh+QQFCgABACwCAAUAAgACAAACAoRRACH5BAkKAAEALAIAAgAMAAwAAAINjAFne8kPo5y02ouzLQAh+QQJCgABACwCAAIADAAMAAACF4wBphvID1uCyNEZM7Ov4v1p0hGOZlAAACH5BAkKAAEALAIAAgAMAAwAAAIUjAGmG8gPW4qS2rscRPp1rH3H1BUAIfkECQoAAQAsAgACAAkADAAAAhGMAaaX64peiLJa6rCVFHdQAAAh+QQJCgABACwCAAIABQAMAAACDYwBFqiX3mJjUM63QAEAIfkECQoAAQAsAgACAAUACQAAAgqMARaol95iY9AUACH5BAkKAAEALAIAAgAFAAUAAAIHjAEWqJeuCgAh+QQJCgABACwFAAIAAgACAAACAoRRADs=" style="width: 32px; height: 32px;" /><span class="ms-accentText" style="font-size: 36px;">' + TaxonomyPickerConsts.WORKING_ON_IT + '</span></div></div></div>');
-                jQuery('body').append(this._waitingDlg);
+            if (this._dialog == null) {
+                this._dialog = jQuery('<div class="cam-taxpicker-dialog"></div>');
+                var dlg = jQuery('<div class="cam-taxpicker-dialog-content"></div>');
+
+                //build dialog header with button
+                var dlgHeader = jQuery('<div class="cam-taxpicker-dialog-content-header"><h1 class="cam-taxpicker-dialog-content-header-title">' + this.LanguageResource.TaxonomyPicker_Dialog_Header + this.Taxonomy.Name + '</h1></div>');
+                this._dlgCloseButton = jQuery('<div class="cam-taxpicker-dialog-content-close"></div>');
+                dlgHeader.append(this._dlgCloseButton);
+                dlg.append(dlgHeader);
+
+                //build dialog body
+                var dlgSubheader = jQuery('<div class="cam-taxpicker-dialog-content-subheader"><div class="cam-taxpicker-dialog-content-subheader-img"></div></div>');
+                this._dlgAddNewTermButton = jQuery('<a style="cursor: pointer;">' + this.LanguageResource.TaxonomyPicker_Dialog_Add_Link + '</a>');
+                if (this.Taxonomy.IsOpenForTermCreation) {
+                    dlgSubheader.append(jQuery('<div class="cam-taxpicker-dialog-content-subheader-title">' + this.LanguageResource.TaxonomyPicker_Dialog_Add_Title + '&nbsp;</div>'));
+                    dlgSubheader.append(jQuery('<div class="cam-taxpicker-dialog-content-subheader-addnew"></div>').append(this._dlgAddNewTermButton));
+                }
+                var dlgBody = jQuery('<div class="cam-taxpicker-dialog-content-body"></div>');
+                dlgBody.append(dlgSubheader);
+                var dlgBodyContainer = jQuery('<div class="cam-taxpicker-dialog-tree-container" style="display: none"></div>');
+
+
+                //build the termset hierarchy
+                var $treeviewContainer = jQuery('<ul id="rootNode" class="cam-taxpicker-treenode-ul" style="height: 100%; margin-left: 0"></ul>');
+                dlgBodyContainer.append($treeviewContainer);
+
+                //build the dialog editor area
+                //TODO: convert the dlgEditor with contenteditable="true" just like the main editor (Enhancement)
+                this._dlgEditor = jQuery('<div class="cam-taxpicker-dialog-selection-editor" RestrictPasteToText="true" AllowMultiLines="false"></div>');
+                this._dlgSelectButton = jQuery('<button>' + this.LanguageResource.TaxonomyPicker_Dialog_Button_Text + ' >></button>');
+
+                var waitingDlg = jQuery('<div class="cam-taxpicker-dialog-waiting-container"> \
+                                            <div class="cam-taxpicker-dialog-waiting-container-inner"> \
+                                                <div aria-hidden="true">•</div> \
+                                                <div aria-hidden="true">•</div> \
+                                                <div aria-hidden="true">•</div> \
+                                                <div aria-hidden="true">•</div> \
+                                                <div aria-hidden="true">•</div> \
+                                            </div> \
+                                        </div>');
+                dlgBody.append(waitingDlg);
+
+                dlgBody.append(dlgBodyContainer).append(jQuery('<div class="cam-taxpicker-dialog-selection-container"></div>').append(this._dlgSelectButton).append(this._dlgEditor));
+                dlg.append(dlgBody);
+                this._dialog.empty().append(jQuery('<div class="cam-taxpicker-dialog-overlay"></div>')).append(dlg);
+
+                //add button area
+                var dlgButtonArea = jQuery('<div class="cam-taxpicker-dialog-button-container"></div>')
+                this._dlgOkButton = jQuery('<button style="float: right;">Ok</button>');
+                this._dlgCancelButton = jQuery('<button style="float: right;">Cancel</button>');
+                dlgBody.append(dlgButtonArea.append(this._dlgCancelButton).append(this._dlgOkButton));
+
             }
-            else {
-                //remove the waiting indicator (if exists)
-                jQuery('body').children('.cam-taxpicker-waiting').remove();
 
-                var termListing;
+            this._dlgEditor.html(this.selectedTermsToHtml());
 
-                //capture what terms are current selected (so we can support cancel)
-                this._tempSelectedTerms = this._selectedTerms.slice(0);
+            jQuery('body').append(this._dialog);
 
-                //initialize the dialog if null
-                if (this._dialog == null) {
-                    this._dialog = jQuery('<div class="cam-taxpicker-dialog"></div>');
-                    var dlg = jQuery('<div class="cam-taxpicker-dialog-content"></div>');
-
-                    //build dialog header with button
-                    var dlgHeader = jQuery('<div class="cam-taxpicker-dialog-content-header"><h1 class="cam-taxpicker-dialog-content-header-title">' + TaxonomyPickerConsts.DIALOG_HEADER + this.TermSet.Name + '</h1></div>');
-                    this._dlgCloseButton = jQuery('<div class="cam-taxpicker-dialog-content-close"></div>');
-                    dlgHeader.append(this._dlgCloseButton);
-                    dlg.append(dlgHeader);
-
-                    //build dialog body
-                    var dlgSubheader = jQuery('<div class="cam-taxpicker-dialog-content-subheader"><img class="cam-taxpicker-dialog-content-subheader-img" src="' + this.TermSet.TermSetImageUrl + '/EMMDoubleTag.png" alt="" /></div>');
-                    this._dlgAddNewTermButton = jQuery('<a style="cursor: pointer;">' + TaxonomyPickerConsts.DIALOG_ADD_LINK + '</a>');
-                    if (this.TermSet.IsOpenForTermCreation) {
-                        dlgSubheader.append(jQuery('<div class="cam-taxpicker-dialog-content-subheader-title">' + TaxonomyPickerConsts.DIALOG_ADD_TITLE + '&nbsp;</div>'));
-                        dlgSubheader.append(jQuery('<div class="cam-taxpicker-dialog-content-subheader-addnew"></div>').append(this._dlgAddNewTermButton));
-                    }
-                    var dlgBody = jQuery('<div class="cam-taxpicker-dialog-content-body"></div>');
-                    dlgBody.append(dlgSubheader);
-                    var dlgBodyContainer = jQuery('<div class="cam-taxpicker-dialog-tree-container"></div>');
-
-                    //build the termset hierarchy
-                    dlgBodyContainer.append(jQuery('<ul id="rootNode" class="cam-taxpicker-treenode-ul root" style="height: 100%;"></ul>'));
-
-                    //build the dialog editor area
-                    //TODO: convert the dlgEditor with contenteditable="true" just like the main editor (Enhancement)
-                    this._dlgEditor = jQuery('<div class="cam-taxpicker-dialog-selection-editor" RestrictPasteToText="true" AllowMultiLines="false"></div>');
-                    this._dlgSelectButton = jQuery('<button>' + TaxonomyPickerConsts.BUTTON_TEXT + ' >></button>');
-                    dlgBody.append(dlgBodyContainer).append(jQuery('<div class="cam-taxpicker-dialog-selection-container"></div>').append(this._dlgSelectButton).append(this._dlgEditor));
-                    dlg.append(dlgBody);
-                    this._dialog.empty().append(jQuery('<div class="cam-taxpicker-dialog-overlay"></div>')).append(dlg);
-
-                    //add button area
-                    var dlgButtonArea = jQuery('<div class="cam-taxpicker-dialog-button-container"></div>')
-                    this._dlgOkButton = jQuery('<button style="float: right;">Ok</button>');
-                    this._dlgCancelButton = jQuery('<button style="float: right;">Cancel</button>');
-                    dlgBody.append(dlgButtonArea.append(this._dlgCancelButton).append(this._dlgOkButton));
-
+            if (!this.Taxonomy.Loaded) {
+                if (this.Taxonomy.TermStoreId || this.Taxonomy.GroupId || this.Taxonomy.TermSetId || this.Taxonomy.AnchorId) {
+                    this._expandingNodes = true;
                 }
 
-                //set the value in the dialogs editor field
-                this._dlgEditor.html(this.selectedTermsToHtml());
+                if (this._controlMode === "designer") {
+                    this.loadTermStore();
+                } else {
+                    this.loadForRuntime();
+                }
+            } else {
+                this._dialog.show();
+                this.enableClickEventOnNode(jQuery('#rootNode'));
+            }
+                
+            this._dlgSelectButton.click(Function.createDelegate(this, this.dialogSelectButtonClicked));
+            this._dlgCloseButton.click(Function.createDelegate(this, this.dialogCancelClicked));
+            this._dlgOkButton.click(Function.createDelegate(this, this.dialogOkClicked));
+            this._dlgCancelButton.click(Function.createDelegate(this, this.dialogCancelClicked));
+            this._dlgAddNewTermButton.click(Function.createDelegate(this, this.dialogNewTermClicked));
+        },
 
-                //add the dialog to the body
-                jQuery('body').append(this._dialog);
+        loadForRuntime: function () {
+            var taxSession = SP.Taxonomy.TaxonomySession.getTaxonomySession(spContext);
+            var termStore = taxSession.getDefaultSiteCollectionTermStore();
+            
+            if (this.Taxonomy.AnchorPath.length === 0) {
+                var termSet = termStore.getTermSet(this.Taxonomy.TermSetId);
 
-                var termName = this.TermSet.Name;
+                this.loadTermSetAsRoot(termSet, jQuery("#rootNode"));
+            } else {
+                var paths = this.Taxonomy.AnchorPath.split("/");
+                var term = termStore.getTerm(paths[0]);
 
-                var that = this;
+                this.loadTermAsRoot(term, jQuery("#rootNode"));
+            }
+        },
 
-                var termImageUrl = this.TermSet.TermSetImageUrl;
+        loadTermStore: function () {
+            var that = this;
+            var $treeviewContainer = jQuery('#rootNode');
 
-                var outHtml = buildTermSetTreeLevel(termImageUrl, this.TermSet.Terms, true, "", function (html) {
-                    document.getElementById('rootNode').innerHTML =
-                                       '<li class="cam-taxpicker-treenode-li">' +
-                                           '<div class="cam-taxpicker-treenode">' +
-                                               '<div class="cam-taxpicker-expander expanded">' + '</div>' +
-                                               '<img src="' + termImageUrl + '/EMMTermSet.png" alt=""/>' +
-                                               '<span id="currNode" class="cam-taxpicker-treenode-title root selected">' + termName + '</span>' +
-                                            '</div>' +
-                                            '<ul class="cam-taxpicker-treenode-ul" style="display: block;">' +
-                                               html +
-                                            '</ul>' +
-                                       '</li>' +
-                                    '</ul>' +
-                                '</div>';
+            this.Taxonomy.loadTermStores(this.Taxonomy.TermStoreId).then(function (termStore) {
+                if (!that._expandingNodes) {
+                    that.doneExpandingNodes();
+                }
 
-                    that._dlgCurrTermNode = jQuery("#currNode");
-                });
+                var cacheObject = { item: termStore, firstLoad: true };
 
+                that.Taxonomy.CacheManager.updateCache(termStore.get_id().toString(), cacheObject);
 
-                //wire events all the dialog events
-                jQuery('.cam-taxpicker-expander').click(function () {
-                    //toggle tree node
-                    if (jQuery(this).hasClass('expanded')) {
-                        jQuery(this).removeClass('expanded');
-                        jQuery(this).addClass('collapsed');
-                        jQuery(this).parent().next().hide();
+                buildTreeView($treeviewContainer, CAMControl.TAXONOMYENUM.TermStore, termStore.get_id().toString(), termStore.get_name(), true, false);
+
+                that.enableClickEventOnNode($treeviewContainer);
+
+                if (that.Taxonomy.GroupId) {
+                    that.Taxonomy.CacheManager.getCache(that.Taxonomy.TermStoreId).firstLoad = false;
+                    $treeviewContainer.find('.cam-taxpicker-expander').removeClass('collapsed').addClass('expanded');
+                    that.loadGroup(termStore.get_id().toString(), $treeviewContainer.find('li').first());
+                } else {
+                    that.doneExpandingNodes();
+                }
+            });
+        },
+
+        loadGroup: function (termStoreId, $container) {
+            var that = this;
+            var termStoreCachedObject = this.Taxonomy.CacheManager.getCache(termStoreId);
+            var termStore = termStoreCachedObject.item;
+
+            this.Taxonomy.loadGroups(termStore).then(function (groups) {
+                var groupsEnumerator = groups.getEnumerator();
+                var firstItemFound = false;
+
+                while (groupsEnumerator.moveNext()) {
+                    var group = groupsEnumerator.get_current();
+                    var cacheObject = { item: group, firstLoad: true };
+
+                    that.Taxonomy.CacheManager.updateCache(group.get_id().toString(), cacheObject);
+
+                    if (!firstItemFound) {
+                        $container.append(jQuery('<ul class="cam-taxpicker-treenode-ul root"></ul>'));
+                        $container = $container.find("ul");
+                        firstItemFound = true;
                     }
-                    else if (jQuery(this).hasClass('collapsed')) {
-                        jQuery(this).removeClass('collapsed');
-                        jQuery(this).addClass('expanded');
-                        jQuery(this).parent().next().show();
-                    }
-                });
 
-                jQuery('.cam-taxpicker-treenode-title').click(Function.createDelegate(this, this.termNodeClicked));
-                jQuery('.cam-taxpicker-treenode-title').dblclick(Function.createDelegate(this, this.termNodeDoubleClicked));
-                this._dlgSelectButton.click(Function.createDelegate(this, this.dialogSelectButtonClicked));
-                this._dlgCloseButton.click(Function.createDelegate(this, this.dialogCancelClicked));
-                this._dlgOkButton.click(Function.createDelegate(this, this.dialogOkClicked));
-                this._dlgCancelButton.click(Function.createDelegate(this, this.dialogCancelClicked));
-                this._dlgAddNewTermButton.click(Function.createDelegate(this, this.dialogNewTermClicked));
+                    buildTreeView($container, CAMControl.TAXONOMYENUM.Group, group.get_id().toString(), group.get_name(), true, false);
+                }
+
+                that.enableClickEventOnNode($container);
+
+                if (that.Taxonomy.GroupId) {
+                    that.Taxonomy.CacheManager.getCache(that.Taxonomy.GroupId).firstLoad = false;
+
+                    var $groupContainer = $container.find('div[data-id="' + that.Taxonomy.GroupId + '"]').closest('li');
+
+                    $groupContainer.find('.cam-taxpicker-expander').removeClass('collapsed').addClass('expanded');
+
+                    that.loadTermSet(that.Taxonomy.GroupId, $groupContainer);
+                } else {
+                    that.doneExpandingNodes();
+                }
+            });
+        },
+
+        loadTermSet: function (groupId, $container) {
+            var that = this;
+            var groupCachedObject = this.Taxonomy.CacheManager.getCache(groupId);
+            var group = groupCachedObject.item;
+
+            this.Taxonomy.loadTermSets(group).then(function (termSets) {
+                var termSetsEnumerator = termSets.getEnumerator();
+                var firstItemFound = false;
+
+                while (termSetsEnumerator.moveNext()) {
+                    var termSet = termSetsEnumerator.get_current();
+                    var cacheObject = { item: termSet, firstLoad: true };
+
+                    that.Taxonomy.CacheManager.setCache(termSet.get_id().toString(), cacheObject);
+
+                    if (!firstItemFound) {
+                        $container.append(jQuery('<ul class="cam-taxpicker-treenode-ul root"></ul>'));
+                        $container = $container.find("ul");
+                        firstItemFound = true;
+                    }
+
+                    buildTreeView($container, CAMControl.TAXONOMYENUM.TermSet, termSet.get_id().toString(), termSet.get_name(), true, true);
+                }
+
+                that.enableClickEventOnNode($container);
+
+                if (that.Taxonomy.TermSetId) {
+                    that.Taxonomy.CacheManager.getCache(that.Taxonomy.TermSetId).firstLoad = false;
+                    
+                    var $termSetNode = $container.find('div[data-id="' + that.Taxonomy.TermSetId + '"]');
+                    var $termSetContainer = $termSetNode.closest('li');
+
+                    $termSetContainer.find('.cam-taxpicker-expander').removeClass('collapsed').addClass('expanded');
+
+                    if (!that.Taxonomy.AnchorId) {
+                        if ($termSetNode.data("id") === that.Taxonomy.TermSetId) {
+                            var term = new Term();
+
+                            term.id = $termSetNode.data("id");
+                            term.name = $termSetNode.find("span").text();
+
+                            $termSetNode.addClass("selected");
+                            that._dlgCurrTermNode = $termSetNode;
+
+                           that.addHighlightedTermToSelection(term);
+                        }
+
+                        that.doneExpandingNodes();
+                    }
+
+                    that.loadTerm(that.Taxonomy.TermSetId, $termSetContainer);
+                } else {
+                    that.doneExpandingNodes();
+                }
+            });
+        },
+
+        loadTermSetAsRoot: function (termSet, $container) {
+            var that = this;
+
+            spContext.load(termSet);
+
+            this.Taxonomy.executeQuery(termSet).then(function (termSet) {
+                var cacheObject = { item: termSet, firstLoad: true };
+
+                that.Taxonomy.CacheManager.updateCache(termSet.get_id().toString(), cacheObject);
+
+                buildTreeView($container, CAMControl.TAXONOMYENUM.TermSet, termSet.get_id().toString(), termSet.get_name(), true, false);
+
+                that.enableClickEventOnNode($container);
+
+                that.doneExpandingNodes();
+            });
+        },
+
+        loadTermAsRoot: function (term, $container) {
+            var that = this;
+
+            spContext.load(term);
+
+            this.Taxonomy.executeQuery(term).then(function (term) {
+                var cacheObject = { item: term, firstLoad: true };
+
+                that.Taxonomy.CacheManager.updateCache(term.get_id().toString(), cacheObject);
+
+                buildTreeView($container, CAMControl.TAXONOMYENUM.Term, term.get_id().toString(), term.get_name(), true, false);
+
+                that.enableClickEventOnNode($container);
+
+                that.doneExpandingNodes();
+            });
+        },
+
+        loadTerm: function (termSetId, $container) {
+            var that = this;
+            var termSetCachedObject = this.Taxonomy.CacheManager.getCache(termSetId);
+            var termSet = termSetCachedObject.item;
+
+            this.Taxonomy.loadTerms(termSet).done(function (terms) {
+                var termsEnumerator = terms.getEnumerator();
+                var firstItemFound = false;
+
+                while (termsEnumerator.moveNext()) {
+                    var term = termsEnumerator.get_current();
+                    var termId = term.get_id().toString();
+                    var termName = term.get_name();
+                    var cacheObject = { item: term, firstLoad: true };
+
+                    that.Taxonomy.CacheManager.updateCache(termId, cacheObject);
+
+                    if (!firstItemFound) {
+                        $container.append(jQuery('<ul class="cam-taxpicker-treenode-ul root"></ul>'));
+                        $container = $container.find("ul");
+                        firstItemFound = true;
+                    }
+                    
+                    var hasChildren = term.get_termsCount() > 0;
+                    var selectable = true;
+
+                    if (that._controlMode === "designer" && !hasChildren) {
+                        selectable = false;
+                    }
+
+                    buildTreeView($container, CAMControl.TAXONOMYENUM.Term, termId, termName, hasChildren, selectable);
+
+                    var $termNode = $container.find('div[data-id="' + termId + '"]');
+                    var $termContainer = $termNode.closest('li');
+
+                    if (termId === that.Taxonomy.AnchorId) {
+                        var term = new Term();
+
+                        term.id = termId;
+                        term.name = termName;
+
+                        that._dlgCurrTermNode = $termNode;
+
+                        that.addHighlightedTermToSelection(term);
+
+                        $termNode.addClass("selected");
+                        that.doneExpandingNodes();   
+                    } else {
+                        if (that.Taxonomy.AnchorPath && that.Taxonomy.AnchorPath.length > 0) {
+                            var paths = that.Taxonomy.AnchorPath.split("/");
+                            var startIndex = paths.indexOf(termId);
+
+                            if (startIndex > -1 && startIndex < paths.length - 1) {
+                                that.Taxonomy.CacheManager.getCache(termId).firstLoad = false;
+                                that.loadTerm(paths[startIndex], $termContainer);
+                            }
+                        }
+                    }
+                }
+
+                that.enableClickEventOnNode($container);
+            });
+        },
+
+        doneExpandingNodes: function () {
+            this._expandingNodes = false;
+            this.Taxonomy.Loaded = true;
+            jQuery('body').find('.cam-taxpicker-dialog-waiting-container').remove();
+            jQuery('body').find('.cam-taxpicker-dialog-tree-container').show();
+        },
+
+        enableClickEventOnNode: function ($container) {
+            var that = this;
+
+            $container.find('.cam-taxpicker-expander').click(function () {
+                //toggle tree node
+                if (jQuery(this).hasClass('expanded')) {
+                    jQuery(this).removeClass('expanded');
+                    jQuery(this).addClass('collapsed');
+                    jQuery(this).parent().next().hide();
+                }
+                else if (jQuery(this).hasClass('collapsed')) {
+                    jQuery(this).removeClass('collapsed');
+                    jQuery(this).addClass('expanded');
+                    jQuery(this).parent().next().show();
+
+                    var $node = jQuery(this).parent().find(".cam-taxpicker-treenode-title");
+                    var nodeId = $node.data("id");
+                    var nodeType = $node.data("type");
+
+                    var cachedObject = that.Taxonomy.CacheManager.getCache(nodeId);
+                    
+                    if (cachedObject && !cachedObject.firstLoad) {
+                        return;
+                    }
+
+                    cachedObject.firstLoad = false;
+
+                    that.Taxonomy.CacheManager.setCache(nodeId, cachedObject);
+
+                    var childType = that.getChildType(nodeType);
+                    that["load" + childType].call(that, nodeId, $node.closest("li"));
+                }
+            });
+
+            jQuery('.cam-taxpicker-treenode-title').click(Function.createDelegate(this, this.termNodeClicked));
+            jQuery('.cam-taxpicker-treenode-title').dblclick(Function.createDelegate(this, this.termNodeDoubleClicked));
+        },
+
+        getChildType: function (type) {
+            switch (type) {
+                case CAMControl.TAXONOMYENUM.TermStore:
+                    return CAMControl.TAXONOMYENUM.Group;
+                case CAMControl.TAXONOMYENUM.Group:
+                    return CAMControl.TAXONOMYENUM.TermSet;
+                default:
+                    return CAMControl.TAXONOMYENUM.Term;
             }
         },
 
         //closes the picker dialog
         closePickerDialog: function (event) {
-            //remove the picker dialog from the body
             jQuery('body').children('.cam-taxpicker-dialog').remove();
         },
 
         //adds a new term to the end of this._selectedTerms
         pushSelectedTerm: function (term) {
             if (!this.existingTerm(term)) {
-                //clone the term so we don't messup the original
-                var clonedTerm = term.clone();
-
-                //clear the RawTerm so it can be serialized
-                clonedTerm.RawTerm = null;
-
                 //pop the existing term if this isn't a multi-select
                 if (!this._isMulti)
                     this.popSelectedTerm();
 
                 //add the term to the selected terms array            
-                this._selectedTerms.push(clonedTerm);
+                this._selectedTerms.push(term);
                 this._hiddenValidated.val(JSON.stringify(this._selectedTerms));
                 //added to trigger change event 
                 this._hiddenValidated.trigger('change');
@@ -1288,7 +1155,7 @@
         //if the term already exists in the selected terms then don't add it
         existingTerm: function (term) {
             for (var j = 0; j < this._selectedTerms.length; j++) {
-                if (this._selectedTerms[j].Id == term.Id) {
+                if (this._selectedTerms[j].id == term.id) {
                     return true;
                 }
             }
@@ -1299,9 +1166,23 @@
         popSelectedTerm: function () {
             //remove the last selected term
             this._selectedTerms.pop();
-            this._hiddenValidated.val(JSON.stringify(this._selectedTerms));
+            this._hiddenValidated.val(this.getSelectedTermsValue(this._selectedTerms));
             //added to trigger change event 
             this._hiddenValidated.trigger('change');
+        },
+
+        getSelectedTermsValue: function (selectedTerms) {
+            if (this._controlMode === "designer" ) {
+                return JSON.stringify(selectedTerms);
+            } else {
+                var selectedValues = [];
+
+                for (var i = 0; i < selectedTerms.length; i++) {
+                    selectedValues.push(selectedTerms[i].name + "|" + selectedTerms[i].id);
+                }
+
+                return selectedValues.join(";");
+            }
         },
 
         //converts this._selectedTerms to html for an editor field
@@ -1309,7 +1190,7 @@
             var termsHtml = '';
             for (var i = 0; i < this._selectedTerms.length; i++) {
                 var e = this._selectedTerms[i];
-                termsHtml += '<span class="cam-taxpicker-term-selected">' + e.Name + '</span><span>;&nbsp;</span>';
+                termsHtml += '<span class="cam-taxpicker-term-selected">' + e.name + '</span><span>;&nbsp;</span>';
             }
             return termsHtml;
         },
@@ -1319,7 +1200,7 @@
             var termsArray = [];
             for (var i = 0; i < this._selectedTerms.length; i++) {
                 var e = this._selectedTerms[i];
-                termsArray.push(e.Name);
+                termsArray.push(e.name);
             }
             return termsArray;
         },
@@ -1331,7 +1212,7 @@
                 var suggestion = suggestions[i];
                 var found = false;
                 for (var j = 0; j < this._selectedTerms.length; j++) {
-                    if (this._selectedTerms[j].Id == suggestion.Id) {
+                    if (this._selectedTerms[j].id == suggestion.id) {
                         found = true;
                         break;
                     }
@@ -1345,53 +1226,23 @@
             return trimmedSuggestions;
         }
     });
-    //********************** END TaxonomyPicker Class **********************
 
-    //called recursively to build a treeview of terms for a termset
-    function buildTermSetTreeLevel(termImageUrl, termList, show, outHtml, cb) {
-
-        var addlStyle = (show) ? 'style="display: block;"' : '';
-
-        var defs = [];
-
-        for (var i = 0, len = termList.length; i < len; i++) {
-            var term = termList[i];
-            var deferred = jQuery.Deferred();
-            defs.push(deferred);
-
-            var addlClass = (term.Children.length > 0) ? 'collapsed' : '';
-            var tHtml = "";
-            tHtml += '<li class="cam-taxpicker-treenode-li">' +
-                         '<div class="cam-taxpicker-treenode">' +
-                             '<div class="cam-taxpicker-expander ' + addlClass + '">' +
-                             '</div>' +
-                             '<img src="' + termImageUrl + '/EMMTerm.png" alt=""/>' +
-                             '<span class="cam-taxpicker-treenode-title"  data-item="' + term.Name + '|' + term.Id + '">' + term.Name + '</span>' +
-                         '</div>';
-
-            //add children if they exist
-            if (term.Children.length > 0) {
-                buildTermSetTreeLevel(termImageUrl, term.Children, false, "", function (html) {
-                    tHtml += '<ul class="cam-taxpicker-treenode-ul">' + html + "</ul></li>";
-                });
-            }
-            else {
-                //TODO We should not add these nodes here. Adds to much overhead on large termsets.
-                //These could be created at inserttime as I don't see any case where
-                //we have several parents in the containing div. It should be as the commented line below
-                //tHtml += '</li>'
-                tHtml += '<ul class="cam-taxpicker-treenode-ul"></ul></li>';
-            }
-
-            outHtml += tHtml;
-            deferred.resolve();
-        }
-
-        jQuery.when(jQuery, defs).done(function () {
-            if (cb) {
-                cb(outHtml)
-            }
-        });
+    function buildTreeView($container, taxonomyType, id, name, hasChildren, selectable) {
+        var expander = hasChildren ? "collapsed" : "";
+        var html = '<li class="cam-taxpicker-treenode-li">' +
+                        '<div class="cam-taxpicker-treenode">' +
+                            '<div class="cam-taxpicker-expander ' + expander + '">' +
+                            '</div>' +
+                            '<div class="cam-taxpicker-treenode-icon ' + taxonomyType.toLowerCase() + '"></div>' +
+                            '<div class="cam-taxpicker-treenode-title ' + taxonomyType.toLowerCase() + '" ' + 
+                                'data-id="' + id + '" ' + 
+                                'data-type="' + taxonomyType+ '" ' + 
+                                'data-name="' + name + '" ' + 
+                                'data-selectable="' + selectable + '"><span>' + name + '</span></div>' +
+                        '</div>'
+                    '</li>';
+        
+        $container.append(jQuery(html));
     }
 
     //creates a new guid
@@ -1407,34 +1258,19 @@
         return result
     }
 
-    //Highlights matches with yellow
-    function getStartingWithHighlightedText(termLabel, match, useContainsSuggestions) {
-        return termLabel.replace(match, '<span style="background-color: yellow;">' + match + '</span>');
-    }
-
-    function getContainsWithHighlightedText(termLabel, match, useContainsSuggestions) {
-        var globalCaseInsensitiveRegExp = new RegExp(match, "ig");
-        return termLabel.replace(globalCaseInsensitiveRegExp, '<span style="background-color: yellow;">' + match + '</span>');
-    }
-
-    //extends jquery to support taxpicker function
-    jQuery.fn.taxpicker = function (options, ctx, changeCallback) {
-        //verify context
-        if (!ctx) {
+    jQuery.fn.taxpicker = function (options, sharepointContext, changeCallback) {
+        if (!sharepointContext) {
             return this;
         }
 
-        //verify an empty collection wasn't passed
         if (!this.length) {
             return this;
         }
 
-        //make sure this is a hidden element
         if (this[0].tagName.toLowerCase() != 'input' || this[0].type.toLowerCase() != 'hidden')
             return this;
 
-        //set spcontext
-        spContext = ctx;
+        spContext = sharepointContext;
 
         if (jQuery.taxpicker == undefined) {
             jQuery.taxpicker = [];
@@ -1446,4 +1282,4 @@
         taxIndex++;
     };
 
-})(CAMControl || (CAMControl = {}));
+})();

@@ -100,15 +100,8 @@
     <Content Include="packages.config" />
     <None Include="Scripts\_references.js" />
     <Content Include="Scripts\taxonomypickercontrol.js" />
-    <Content Include="Styles\Images\Close.png" />
-    <Content Include="Styles\Images\EMMCopyTerm.png" />
-    <Content Include="Styles\Images\EMMDoubleTag.png" />
-    <Content Include="Styles\Images\EMMTerm.png" />
-    <Content Include="Styles\Images\EMMTermSet.png" />
-    <Content Include="Styles\Images\MDNCollapsed.png" />
-    <Content Include="Styles\Images\MDNExpanded.png" />
-    <Content Include="Styles\Images\MDNNo.png" />
-    <Content Include="Styles\Images\menubuttonhover.gif" />
+    <Content Include="Styles\Images\TaxonomyPicker_Menu_Hover.gif" />
+    <Content Include="Styles\Images\TaxonomyPicker_Sprites.png" />
     <Content Include="Styles\taxonomypickercontrol.css" />
     <Content Include="Web.config">
       <SubType>Designer</SubType>

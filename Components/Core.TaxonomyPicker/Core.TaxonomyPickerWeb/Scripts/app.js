@@ -1,8 +1,18 @@
 ﻿// variable used for cross site CSOM calls
 var context;
+var language = {
+    TaxonomyPicker_Dialog_Header: "Select: ",
+    TaxonomyPicker_Dialog_Button_Text: "Select"
+}
+
+function chromeLoaded() {
+    $('body').show();
+}
 
 //Wait for the page to load
 $(document).ready(function () {
+
+    'use strict';
 
     //Get the URI decoded SharePoint site url from the SPHostUrl parameter.
     var spHostUrl = decodeURIComponent(getQueryStringParameter('SPHostUrl'));
@@ -11,6 +21,19 @@ $(document).ready(function () {
 
     //Build absolute path to the layouts root with the spHostUrl
     var layoutsRoot = spHostUrl + '/_layouts/15/';
+
+    //function callback to render chrome after SP.UI.Controls.js loads
+    function renderSPChrome() {
+        //Set the chrome options for launching Help, Account, and Contact pages
+        var options = {
+            'appTitle': document.title,
+            'onCssLoaded': 'chromeLoaded()'
+        };
+
+        //Load the Chrome Control in the divSPChrome element of the page
+        var chromeNavigation = new SP.UI.Controls.Navigation('divSPChrome', options);
+        chromeNavigation.setVisible(true);
+    }
 
     //load all appropriate scripts for the page to function
     $.getScript(layoutsRoot + 'SP.Runtime.js',
@@ -36,16 +59,51 @@ $(document).ready(function () {
 
                                     var termId = "4edc1fc7-cbb3-4589-8941-048e7e7fd5df";
 
-                                    //bind the taxonomy picker to the default keywords termset
-                                    //$('#taxPickerKeywords').taxpicker({ isMulti: true, allowFillIn: true, useKeywords: true }, context);
-                                    //$('#taxPickerKeywordsContainsSuggestions').taxpicker({ isMulti: true, allowFillIn: true, useKeywords: true, useContainsSuggestions: true }, context);
-
                                     //bind taxpickers that depend on eachothers choices
-                                    $('#taxPickerContinent').taxpicker({ isMulti: false, allowFillIn: false, useKeywords: false, termSetId: termId, termSetImageUrl: "/Styles/Images" }, context);
+                                    $('#taxPickerContinent').taxpicker({
+                                        mode: 'designer',
+                                        isMulti: false,
+                                        allowFillIn: false,
+                                        languageResource: language,
+                                        useKeywords: false,
+                                        termStoreId: "d762d1db-38dd-4492-bcc4-59bd0febab28",
+                                        groupId: "d467bf92-45f2-405c-be9a-51d51fd7190a",
+                                        termSetId: "4edc1fc7-cbb3-4589-8941-048e7e7fd5df",
+                                        anchorPath: "cddfb72e-e8cc-4d5d-a2fb-ce9832b7a0f7/2feb6ece-bf24-4247-bd43-e971b7dbf402",
+                                        anchorId: "2feb6ece-bf24-4247-bd43-e971b7dbf402",
+                                        termSetImageUrl: "/Styles/Images"
+                                    }, context);
+                                    //
                                 });
                         });
                 });
         });
+
+    $('#doStuff').click(function (e) {
+        var selectedTerms = JSON.parse($('#taxPickerContinent').val())[0] || "";
+        var selectedValue = [{
+            "name": selectedTerms.name,
+            "termStoreId": selectedTerms.termStoreId,
+            "groupId": selectedTerms.groupId,
+            "termSetId": selectedTerms.termSetId,
+            "anchorId": selectedTerms.anchorId,
+            "anchorPath": selectedTerms.anchorPath
+        }];
+
+        $('#taxPickerFiller').taxpicker(
+            {
+                mode: 'runtime',
+                isMulti: false,
+                allowFillIn: false,
+                useKeywords: false,
+                languageResource: language,
+                termStoreId: selectedTerms.termStoreId,
+                groupId: selectedTerms.groupId,
+                termSetId: selectedTerms.termSetId,
+                anchorId: selectedTerms.anchorId,
+                anchorPath: selectedTerms.anchorPath
+            }, context)
+    });
 });
 
 
