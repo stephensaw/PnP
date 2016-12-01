@@ -229,20 +229,21 @@
     margin: 2px 0px 2px 4px;
     vertical-align: middle;
 }
+
 .cam-taxpicker-expander {
     display: inline-block;
     vertical-align: middle;
     width: 15px;
     height: 20px;
-    background: url(/Styles/Images/TaxonomyPicker_Sprites.png) no-repeat;
-    background-position: -16px 0;
 }
 
-.expanded.cam-taxpicker-expander {
+.cam-taxpicker-expander.expanded {
+    background: url(/Styles/Images/TaxonomyPicker_Sprites.png) no-repeat;
     background-position: -15px 0;
 }
 
 .collapsed.cam-taxpicker-expander {
+    background: url(/Styles/Images/TaxonomyPicker_Sprites.png) no-repeat;
     background-position: 0 0;
 }
 

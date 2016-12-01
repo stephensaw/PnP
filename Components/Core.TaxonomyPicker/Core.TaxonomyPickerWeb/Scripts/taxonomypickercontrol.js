@@ -134,6 +134,7 @@
         this._controlMode = options.mode !== undefined ? options.mode.toLowerCase() : "designer";
 
         this._dialog = null; //the dialog control
+        this._dialogTitle = options.title || "";
         this._dlgCurrTerm = null; //the current term highlighted in the taxonomy picker dialog
         this._dlgCurrTermNode = null; //the current tree node selected
         this._dlgCloseButton = null; //the Close button in the taxonomy picker dialog
@@ -177,10 +178,15 @@
                 if (this._controlMode === "designer") {
                     var terms = JSON.parse(this._initialValue);
 
-                    for (var i = 0; i < terms.length; i++) {
-                        var t = JSON.parse(JSON.stringify(terms[i]));
-                    
-                        this._selectedTerms.push(t);
+                    if (terms.length > 0) {
+                        var that = this;
+
+                        this.prefetchSelectedTerm(terms[0]).done(function (loadedNode) {
+                            terms[0].name = loadedNode.get_name();
+
+                            that._selectedTerms.push(terms[0]);
+                            that._editor.html(that.selectedTermsToHtml());
+                        });
                     }
                 } else {
                     var terms = this._initialValue.split(";");
@@ -202,6 +208,32 @@
             this._dlgButton.click(Function.createDelegate(this, this.showPickerDialog)); //dialog button is clicked
             this._editor.keydown(Function.createDelegate(this, this.keydown)); //key is pressed in the editor control
             jQuery(document).mousedown(Function.createDelegate(this, this.checkExternalClick)); //mousedown somewhere in the document
+        },
+
+        prefetchSelectedTerm: function (selectedTerm) {
+            var $deferred = jQuery.Deferred();
+
+            if (!selectedTerm) {
+                return;
+            }
+
+            var taxSession = SP.Taxonomy.TaxonomySession.getTaxonomySession(spContext);
+            var termStore = taxSession.getDefaultSiteCollectionTermStore();
+            var rootNode = null;
+
+            if (!selectedTerm.anchorId || selectedTerm.anchorId.length <= 0) {
+                rootNode = termStore.getTermSet(new SP.Guid(selectedTerm.termSetId));
+            } else {
+                rootNode = termStore.getTerm(selectedTerm.anchorId);
+            }
+
+            spContext.load(rootNode);
+
+            this.Taxonomy.executeQuery(rootNode).then(function (loadedNode) {
+                $deferred.resolve(loadedNode);
+            });
+
+            return $deferred.promise();
         },
 
         reset: function () {
@@ -761,7 +793,13 @@
                 var dlg = jQuery('<div class="cam-taxpicker-dialog-content"></div>');
 
                 //build dialog header with button
-                var dlgHeader = jQuery('<div class="cam-taxpicker-dialog-content-header"><h1 class="cam-taxpicker-dialog-content-header-title">' + this.LanguageResource.TaxonomyPicker_Dialog_Header + this.Taxonomy.Name + '</h1></div>');
+                var dialogTitle = "";
+
+                if (this._dialogTitle.length > 0) {
+                    dialogTitle = this.LanguageResource.TaxonomyPicker_Dialog_Header + this._dialogTitle;
+                }
+
+                var dlgHeader = jQuery('<div class="cam-taxpicker-dialog-content-header"><h1 class="cam-taxpicker-dialog-content-header-title">' + dialogTitle + '</h1></div>');
                 this._dlgCloseButton = jQuery('<div class="cam-taxpicker-dialog-content-close"></div>');
                 dlgHeader.append(this._dlgCloseButton);
                 dlg.append(dlgHeader);
